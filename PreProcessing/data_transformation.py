@@ -21,6 +21,7 @@ TIME_COLUMN = "unix_time"
 DOB_COLUMN = "dob"
 TARGET_COLUMN = "is_fraud"
 ONE_HOT_COLUMNS = ("category", "gender")
+STRING_COLUMNS = ("cc_num", "zip")
 NIGHT_HOURS = {22, 23, 0, 1, 2, 3, 4, 5, 6}
 EARTH_RADIUS_KM = 6371.0
 
@@ -62,7 +63,7 @@ def add_age_feature(dataframe: pd.DataFrame) -> pd.DataFrame:
 
     transformed["customer_age"] = (
         (transaction_time - birth_date).dt.days / 365.25
-    ).round(1)
+    ).round().astype("int64")
 
     return transformed
 
@@ -95,12 +96,23 @@ def encode_categorical_features(dataframe: pd.DataFrame) -> pd.DataFrame:
         dataframe,
         columns=list(ONE_HOT_COLUMNS),
         prefix=list(ONE_HOT_COLUMNS),
-        dtype="int8",
+        dtype=bool,
     )
+
+
+def apply_dtype_conversions(dataframe: pd.DataFrame) -> pd.DataFrame:
+    transformed = dataframe.copy()
+
+    for column in STRING_COLUMNS:
+        if column in transformed.columns:
+            transformed[column] = transformed[column].astype("string")
+
+    return transformed
 
 
 def transform_dataset(dataframe: pd.DataFrame) -> pd.DataFrame:
     transformed = dataframe.copy()
+    transformed = apply_dtype_conversions(transformed)
     transformed = add_time_features(transformed)
     transformed = add_age_feature(transformed)
     transformed = add_distance_feature(transformed)
