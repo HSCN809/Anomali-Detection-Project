@@ -87,7 +87,7 @@ def encode_categorical_features(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def transform_dataset(dataframe: pd.DataFrame) -> pd.DataFrame:
-    transformed = dataframe.drop(columns=["Unnamed: 0"], errors="ignore")
+    transformed = dataframe.copy()
     transformed = add_time_features(transformed)
     transformed = add_distance_feature(transformed)
     transformed = encode_categorical_features(transformed)
