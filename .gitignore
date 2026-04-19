@@ -6,3 +6,4 @@ DataSet/.complete/
 .venv/
 prep_outputs/
 eda_outputs/
+models/
