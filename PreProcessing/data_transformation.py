@@ -46,12 +46,8 @@ def add_time_features(dataframe: pd.DataFrame) -> pd.DataFrame:
     transformed["transaction_day_of_week"] = transaction_time.dt.dayofweek.astype("Int8")
     transformed["transaction_day_of_month"] = transaction_time.dt.day.astype("Int8")
     transformed["transaction_month"] = transaction_time.dt.month.astype("Int8")
-    transformed["is_weekend"] = (
-        transformed["transaction_day_of_week"].isin([5, 6]).astype("int8")
-    )
-    transformed["is_night"] = (
-        transformed["transaction_hour"].isin(NIGHT_HOURS).astype("int8")
-    )
+    transformed["is_weekend"] = transformed["transaction_day_of_week"].isin([5, 6])
+    transformed["is_night"] = transformed["transaction_hour"].isin(NIGHT_HOURS)
 
     return transformed
 
@@ -106,6 +102,9 @@ def apply_dtype_conversions(dataframe: pd.DataFrame) -> pd.DataFrame:
     for column in STRING_COLUMNS:
         if column in transformed.columns:
             transformed[column] = transformed[column].astype("string")
+
+    if TARGET_COLUMN in transformed.columns:
+        transformed[TARGET_COLUMN] = transformed[TARGET_COLUMN].astype(bool)
 
     return transformed
 
