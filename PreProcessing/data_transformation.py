@@ -17,10 +17,10 @@ DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_merged.csv"
 TRANSFORMED_DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_transformed.csv"
 OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
 
-TIME_COLUMN = "trans_date_trans_time"
+TIME_COLUMN = "unix_time"
 TARGET_COLUMN = "is_fraud"
 ONE_HOT_COLUMNS = ("category", "gender")
-NIGHT_HOURS = {22, 23, 0, 1, 2, 3}
+NIGHT_HOURS = {22, 23, 0, 1, 2, 3, 4, 5, 6}
 EARTH_RADIUS_KM = 6371.0
 
 console = Console()
@@ -38,7 +38,7 @@ def load_dataset() -> pd.DataFrame:
 
 def add_time_features(dataframe: pd.DataFrame) -> pd.DataFrame:
     transformed = dataframe.copy()
-    transaction_time = pd.to_datetime(transformed[TIME_COLUMN], errors="coerce")
+    transaction_time = pd.to_datetime(transformed[TIME_COLUMN], unit="s", errors="coerce")
 
     transformed["transaction_hour"] = transaction_time.dt.hour.astype("Int8")
     transformed["transaction_day_of_week"] = transaction_time.dt.dayofweek.astype("Int8")
