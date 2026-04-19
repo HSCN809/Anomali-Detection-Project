@@ -18,6 +18,7 @@ TRANSFORMED_DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_transformed.csv"
 OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
 
 TIME_COLUMN = "unix_time"
+DOB_COLUMN = "dob"
 TARGET_COLUMN = "is_fraud"
 ONE_HOT_COLUMNS = ("category", "gender")
 NIGHT_HOURS = {22, 23, 0, 1, 2, 3, 4, 5, 6}
@@ -50,6 +51,18 @@ def add_time_features(dataframe: pd.DataFrame) -> pd.DataFrame:
     transformed["is_night"] = (
         transformed["transaction_hour"].isin(NIGHT_HOURS).astype("int8")
     )
+
+    return transformed
+
+
+def add_age_feature(dataframe: pd.DataFrame) -> pd.DataFrame:
+    transformed = dataframe.copy()
+    transaction_time = pd.to_datetime(transformed[TIME_COLUMN], unit="s", errors="coerce")
+    birth_date = pd.to_datetime(transformed[DOB_COLUMN], errors="coerce")
+
+    transformed["customer_age"] = (
+        (transaction_time - birth_date).dt.days / 365.25
+    ).round(1)
 
     return transformed
 
@@ -89,6 +102,7 @@ def encode_categorical_features(dataframe: pd.DataFrame) -> pd.DataFrame:
 def transform_dataset(dataframe: pd.DataFrame) -> pd.DataFrame:
     transformed = dataframe.copy()
     transformed = add_time_features(transformed)
+    transformed = add_age_feature(transformed)
     transformed = add_distance_feature(transformed)
     transformed = encode_categorical_features(transformed)
 
@@ -248,6 +262,7 @@ def export_transformation_analysis(dataframe: pd.DataFrame) -> None:
                 "rows",
                 "columns",
                 "created_time_features",
+                "created_age_features",
                 "created_distance_features",
                 "created_encoded_features",
                 "output_file",
@@ -256,6 +271,7 @@ def export_transformation_analysis(dataframe: pd.DataFrame) -> None:
                 f"{len(dataframe):,}",
                 f"{len(dataframe.columns):,}",
                 "6 columns",
+                "1 column",
                 "1 column",
                 f"{len([column for column in dataframe.columns if column.startswith(('category_', 'gender_'))])} one-hot columns",
                 "DataSet/fraud_transformed.csv",
