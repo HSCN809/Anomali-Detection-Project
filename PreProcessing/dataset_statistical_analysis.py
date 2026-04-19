@@ -9,22 +9,61 @@ except ModuleNotFoundError as exc:
     ) from exc
 
 try:
-    from tabulate import tabulate
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
 except ModuleNotFoundError:
-    tabulate = None
+    Console = None
+    Panel = None
+    Table = None
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATASET_DIR = ROOT_DIR / "DataSet"
 DATASET_FILES = ("fraudTrain.csv", "fraudTest.csv")
 TARGET_COLUMN = "is_fraud"
-TABLE_FORMAT = "github"
+console = Console() if Console is not None else None
 
 
 def print_section(title: str) -> None:
+    if console is not None:
+        console.print(Panel.fit(title, style="bold cyan"))
+        return
+
     print("\n" + "=" * 80)
     print(title)
     print("=" * 80)
+
+
+def format_value(value) -> str:
+    if pd.isna(value):
+        return ""
+
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+
+    return str(value)
+
+
+def print_plain_table(data, *, index: bool = True) -> None:
+    print(data.to_string(index=index) if isinstance(data, pd.DataFrame) else data)
+
+
+def print_rich_table(data: pd.DataFrame, *, index: bool = True) -> None:
+    table = Table(show_header=True, header_style="bold magenta", show_lines=False)
+
+    if index:
+        table.add_column("index", style="dim")
+
+    for column in data.columns:
+        table.add_column(str(column))
+
+    for row_index, row in data.iterrows():
+        values = [format_value(row_index)] if index else []
+        values.extend(format_value(value) for value in row)
+        table.add_row(*values)
+
+    console.print(table)
 
 
 def print_table(data, *, index: bool = True) -> None:
@@ -33,23 +72,15 @@ def print_table(data, *, index: bool = True) -> None:
         data.columns = ["column", "value"]
         index = False
 
-    if tabulate is None:
-        print(data.to_string(index=index) if isinstance(data, pd.DataFrame) else data)
+    if console is None:
+        print_plain_table(data, index=index)
         return
 
     if isinstance(data, pd.DataFrame):
-        print(
-            tabulate(
-                data,
-                headers="keys",
-                tablefmt=TABLE_FORMAT,
-                showindex=index,
-                floatfmt=",.2f",
-            )
-        )
+        print_rich_table(data, index=index)
         return
 
-    print(tabulate(data, tablefmt=TABLE_FORMAT, floatfmt=",.2f"))
+    console.print(data)
 
 
 def analyze_dataframe(name: str, df: pd.DataFrame) -> None:
