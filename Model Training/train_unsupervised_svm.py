@@ -12,38 +12,39 @@ from joblib import dump
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from sklearn.kernel_approximation import RBFSampler
-from sklearn.linear_model import SGDOneClassSVM
+from sklearn.linear_model import SGDClassifier
 from sklearn.metrics import (
     average_precision_score,
+    confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
     roc_auc_score,
 )
 from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_scaled_train.csv"
-DEFAULT_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "rbf_sgd_oneclass_svm_model.pkl"
+DEFAULT_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_sgd_svm_model.pkl"
 
 TARGET_COLUMN = "is_fraud"
 FREQUENCY_COLUMNS = ["job", "zip"]
 MISSING_CATEGORY = "__missing__"
 RANDOM_STATE = 42
+RECALL_TARGET = 0.80
+FPR_TARGET = 0.02
 
 console = Console()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train an unsupervised RBFSampler -> SGDOneClassSVM fraud anomaly model."
+        description="Train a supervised SGD-based linear SVM fraud classifier."
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_PATH)
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH)
-    parser.add_argument("--tuning-sample-size", type=int, default=100_000)
+    parser.add_argument("--training-sample-size", type=int, default=None)
     parser.add_argument("--validation-size", type=float, default=0.2)
     parser.add_argument("--chunksize", type=int, default=200_000)
     parser.add_argument("--random-state", type=int, default=RANDOM_STATE)
@@ -52,12 +53,6 @@ def parse_args() -> argparse.Namespace:
         choices=["fast", "default"],
         default="default",
         help="fast is useful for smoke tests; default is the normal tuning grid.",
-    )
-    parser.add_argument(
-        "--final-max-rows",
-        type=int,
-        default=None,
-        help="Optional cap for final training rows. Leave empty to train on the full train CSV.",
     )
     parser.add_argument(
         "--dry-run",
@@ -93,14 +88,14 @@ def compute_frequency_maps(path: Path, chunksize: int) -> tuple[dict[str, dict[s
     return frequency_maps, row_count
 
 
-def sample_training_data(
+def load_training_data(
     path: Path,
-    sample_size: int,
+    sample_size: int | None,
     total_rows: int,
     chunksize: int,
     random_state: int,
 ) -> pd.DataFrame:
-    if sample_size >= total_rows:
+    if sample_size is None or sample_size >= total_rows:
         return pd.read_csv(
             path,
             dtype={"job": "string", "zip": "string"},
@@ -160,193 +155,246 @@ def prepare_features(
     return frame.astype("float32"), target
 
 
-def get_param_grid(preset: str) -> list[dict[str, float | int]]:
+def get_param_grid(preset: str) -> list[dict[str, float | str]]:
     if preset == "fast":
-        gamma_values = [0.05]
-        component_values = [64]
-        nu_values = [0.005, 0.01]
-    else:
-        gamma_values = [0.01, 0.05]
-        component_values = [64, 128]
-        nu_values = [0.005, 0.01]
+        return [
+            {
+                "loss": "modified_huber",
+                "alpha": 0.001,
+                "penalty": "l2",
+                "fraud_weight": 200,
+                "non_fraud_ratio": 20,
+            }
+        ]
 
     return [
-        {"gamma": gamma, "n_components": n_components, "nu": nu}
-        for gamma, n_components, nu in product(gamma_values, component_values, nu_values)
+        {
+            "loss": loss,
+            "alpha": alpha,
+            "penalty": "l2",
+            "fraud_weight": fraud_weight,
+            "non_fraud_ratio": non_fraud_ratio,
+        }
+        for loss, alpha, fraud_weight, non_fraud_ratio in product(
+            ["modified_huber", "log_loss"],
+            [0.001],
+            [50, 100, 200, 300],
+            [10, 20, 50],
+        )
     ]
 
 
-def build_model(params: dict[str, float | int], random_state: int) -> Pipeline:
-    return Pipeline(
-        steps=[
-            (
-                "rbf_sampler",
-                RBFSampler(
-                    gamma=float(params["gamma"]),
-                    n_components=int(params["n_components"]),
-                    random_state=random_state,
-                ),
-            ),
-            (
-                "sgd_one_class_svm",
-                SGDOneClassSVM(
-                    nu=float(params["nu"]),
-                    max_iter=1000,
-                    tol=1e-3,
-                    shuffle=True,
-                    random_state=random_state,
-                ),
-            ),
-        ]
+def build_model(params: dict[str, float | str], random_state: int) -> SGDClassifier:
+    return SGDClassifier(
+        loss=str(params["loss"]),
+        penalty=str(params["penalty"]),
+        alpha=float(params["alpha"]),
+        class_weight={0: 1.0, 1: float(params["fraud_weight"])},
+        max_iter=1000,
+        tol=1e-3,
+        random_state=random_state,
+        n_jobs=1,
     )
 
 
-def score_model(model: Pipeline, x_valid: pd.DataFrame, y_valid: pd.Series) -> dict[str, float]:
-    anomaly_scores = -model.decision_function(x_valid)
-    predictions = model.predict(x_valid)
-    predicted_fraud = predictions == -1
-    y_true = y_valid.astype(bool)
+def decision_scores(model: SGDClassifier, features: pd.DataFrame) -> np.ndarray:
+    if hasattr(model, "decision_function"):
+        return model.decision_function(features)
 
-    if y_true.nunique() == 2:
-        roc_auc = roc_auc_score(y_true, anomaly_scores)
-        average_precision = average_precision_score(y_true, anomaly_scores)
-    else:
-        roc_auc = math.nan
-        average_precision = math.nan
+    probabilities = model.predict_proba(features)
+    return probabilities[:, 1]
+
+
+def metrics_from_predictions(
+    y_true: pd.Series,
+    predictions: np.ndarray,
+    scores: np.ndarray,
+) -> dict[str, float]:
+    y_bool = y_true.astype(bool).to_numpy()
+    tn, fp, fn, tp = confusion_matrix(y_bool, predictions, labels=[False, True]).ravel()
 
     return {
-        "average_precision": average_precision,
-        "roc_auc": roc_auc,
-        "precision": precision_score(y_true, predicted_fraud, zero_division=0),
-        "recall": recall_score(y_true, predicted_fraud, zero_division=0),
-        "f1": f1_score(y_true, predicted_fraud, zero_division=0),
-        "predicted_anomaly_rate": float(np.mean(predicted_fraud)),
+        "tn": int(tn),
+        "fp": int(fp),
+        "fn": int(fn),
+        "tp": int(tp),
+        "recall": recall_score(y_bool, predictions, zero_division=0),
+        "false_positive_rate": fp / (fp + tn) if (fp + tn) else 0.0,
+        "precision": precision_score(y_bool, predictions, zero_division=0),
+        "f1": f1_score(y_bool, predictions, zero_division=0),
+        "average_precision": average_precision_score(y_bool, scores),
+        "roc_auc": roc_auc_score(y_bool, scores),
+        "predicted_fraud_rate": float(np.mean(predictions)),
     }
+
+
+def build_threshold_report(y_true: pd.Series, scores: np.ndarray) -> pd.DataFrame:
+    thresholds = np.unique(
+        np.concatenate(
+            [
+                np.quantile(scores, np.linspace(0.001, 0.999, 300)),
+                np.array([0.0]),
+            ]
+        )
+    )
+    rows = []
+
+    for threshold in thresholds:
+        predictions = scores >= threshold
+        metrics = metrics_from_predictions(y_true, predictions, scores)
+        rows.append({"threshold": float(threshold), **metrics})
+
+    return pd.DataFrame(rows)
+
+
+def select_threshold(threshold_report: pd.DataFrame) -> pd.Series:
+    candidates = threshold_report[threshold_report["recall"] >= RECALL_TARGET]
+    if not candidates.empty:
+        return candidates.sort_values(
+            ["false_positive_rate", "precision", "f1"],
+            ascending=[True, False, False],
+        ).iloc[0]
+
+    return threshold_report.sort_values(
+        ["f1", "average_precision", "roc_auc"],
+        ascending=False,
+    ).iloc[0]
+
+
+def undersample_training_fold(
+    features: pd.DataFrame,
+    target: pd.Series,
+    non_fraud_ratio: int,
+    random_state: int,
+) -> tuple[pd.DataFrame, pd.Series]:
+    fraud_index = target[target.astype(bool)].index
+    non_fraud_index = target[~target.astype(bool)].index
+
+    max_non_fraud = len(fraud_index) * int(non_fraud_ratio)
+    sampled_non_fraud_count = min(len(non_fraud_index), max_non_fraud)
+    sampled_non_fraud_index = pd.Index(non_fraud_index).to_series().sample(
+        n=sampled_non_fraud_count,
+        random_state=random_state,
+    ).index
+
+    sampled_index = pd.Index(fraud_index).append(pd.Index(sampled_non_fraud_index))
+    sampled_index = sampled_index.to_series().sample(
+        frac=1.0,
+        random_state=random_state,
+    ).index
+
+    return features.loc[sampled_index], target.loc[sampled_index]
 
 
 def tune_hyperparameters(
     features: pd.DataFrame,
     target: pd.Series,
-    param_grid: list[dict[str, float | int]],
+    param_grid: list[dict[str, float | str]],
     validation_size: float,
     random_state: int,
-) -> tuple[dict[str, float | int], list[dict[str, float]]]:
-    stratify = target if target.nunique() == 2 else None
+) -> tuple[dict[str, float | str], float, list[dict[str, float | str]]]:
     x_train, x_valid, y_train, y_valid = train_test_split(
         features,
         target,
         test_size=validation_size,
         random_state=random_state,
-        stratify=stratify,
+        stratify=target,
     )
 
     results = []
     best_params = param_grid[0]
-    best_score = -math.inf
+    best_threshold = 0.0
+    best_selection_score = -math.inf
 
     for index, params in enumerate(param_grid, start=1):
         console.log(f"Testing params {index}/{len(param_grid)}: {params}")
+        sampled_x_train, sampled_y_train = undersample_training_fold(
+            x_train,
+            y_train,
+            int(params["non_fraud_ratio"]),
+            random_state + index,
+        )
         model = build_model(params, random_state)
-        model.fit(x_train)
-        metrics = score_model(model, x_valid, y_valid)
-        result = {**params, **metrics}
+        model.fit(sampled_x_train, sampled_y_train.astype(int))
+
+        scores = decision_scores(model, x_valid)
+        threshold_report = build_threshold_report(y_valid, scores)
+        selected = select_threshold(threshold_report)
+        result = {
+            **params,
+            "fit_rows": len(sampled_x_train),
+            "fit_fraud_rows": int(sampled_y_train.sum()),
+            **selected.to_dict(),
+        }
         results.append(result)
 
-        selection_score = metrics["average_precision"]
-        if math.isnan(selection_score):
-            selection_score = metrics["f1"]
+        target_hit = result["recall"] >= RECALL_TARGET
+        selection_score = (
+            10 - float(result["false_positive_rate"]) + float(result["precision"])
+            if target_hit
+            else float(result["recall"])
+        )
 
-        if selection_score > best_score:
-            best_score = selection_score
+        if selection_score > best_selection_score:
+            best_selection_score = selection_score
             best_params = params
+            best_threshold = float(result["threshold"])
 
-    return best_params, results
+    return best_params, best_threshold, results
 
 
 def fit_final_model(
-    path: Path,
-    frequency_maps: dict[str, dict[str, float]],
-    feature_columns: list[str],
-    params: dict[str, float | int],
-    chunksize: int,
+    features: pd.DataFrame,
+    target: pd.Series,
+    params: dict[str, float | str],
     random_state: int,
-    max_rows: int | None,
-) -> tuple[Pipeline, int]:
-    rbf_sampler = RBFSampler(
-        gamma=float(params["gamma"]),
-        n_components=int(params["n_components"]),
-        random_state=random_state,
+) -> SGDClassifier:
+    features, target = undersample_training_fold(
+        features,
+        target,
+        int(params["non_fraud_ratio"]),
+        random_state,
     )
-    template = pd.DataFrame(
-        np.zeros((1, len(feature_columns)), dtype=np.float32),
-        columns=feature_columns,
-    )
-    rbf_sampler.fit(template)
-
-    svm = SGDOneClassSVM(
-        nu=float(params["nu"]),
-        max_iter=1000,
-        tol=1e-3,
-        shuffle=True,
-        random_state=random_state,
-    )
-
-    trained_rows = 0
-    for chunk in read_csv_chunks(path, chunksize):
-        if max_rows is not None:
-            remaining_rows = max_rows - trained_rows
-            if remaining_rows <= 0:
-                break
-            chunk = chunk.head(remaining_rows)
-
-        features, _ = prepare_features(chunk, frequency_maps, feature_columns=feature_columns)
-        transformed = rbf_sampler.transform(features).astype("float32", copy=False)
-        svm.partial_fit(transformed)
-        trained_rows += len(features)
-        console.log(f"Final training rows processed: {trained_rows:,}")
-
-    model = Pipeline(
-        steps=[
-            ("rbf_sampler", rbf_sampler),
-            ("sgd_one_class_svm", svm),
-        ]
-    )
-    return model, trained_rows
+    model = build_model(params, random_state)
+    model.fit(features, target.astype(int))
+    return model
 
 
-def print_tuning_results(results: list[dict[str, float]]) -> None:
-    table = Table(title="Hyperparameter Tuning Results", show_lines=True)
+def print_tuning_results(results: list[dict[str, float | str]]) -> None:
+    table = Table(title="Supervised SVM Tuning Results", show_lines=True)
     for column in [
-        "gamma",
-        "n_components",
-        "nu",
+        "loss",
+        "alpha",
+        "fraud_weight",
+        "non_fraud_ratio",
+        "fit_rows",
+        "threshold",
+        "recall",
+        "false_positive_rate",
+        "precision",
+        "f1",
         "average_precision",
         "roc_auc",
-        "precision",
-        "recall",
-        "f1",
-        "predicted_anomaly_rate",
+        "predicted_fraud_rate",
     ]:
         table.add_column(column, justify="right")
 
-    sorted_results = sorted(
-        results,
-        key=lambda item: (
-            -1 if math.isnan(float(item["average_precision"])) else float(item["average_precision"])
-        ),
-        reverse=True,
-    )
+    sorted_results = sorted(results, key=lambda item: float(item["f1"]), reverse=True)
     for result in sorted_results:
         table.add_row(
-            f"{result['gamma']}",
-            f"{int(result['n_components'])}",
-            f"{result['nu']}",
-            f"{result['average_precision']:.4f}",
-            f"{result['roc_auc']:.4f}",
-            f"{result['precision']:.4f}",
-            f"{result['recall']:.4f}",
-            f"{result['f1']:.4f}",
-            f"{result['predicted_anomaly_rate']:.4f}",
+            f"{result['loss']}",
+            f"{result['alpha']}",
+            f"{result['fraud_weight']}",
+            f"{result['non_fraud_ratio']}",
+            f"{int(result['fit_rows']):,}",
+            f"{float(result['threshold']):.6f}",
+            f"{float(result['recall']):.4f}",
+            f"{float(result['false_positive_rate']):.4f}",
+            f"{float(result['precision']):.4f}",
+            f"{float(result['f1']):.4f}",
+            f"{float(result['average_precision']):.4f}",
+            f"{float(result['roc_auc']):.4f}",
+            f"{float(result['predicted_fraud_rate']):.4f}",
         )
 
     console.print(table)
@@ -360,10 +408,11 @@ def main() -> None:
 
     console.print(
         Panel.fit(
-            "Training model: RBFSampler -> SGDOneClassSVM\n"
+            "Training model: supervised SGDClassifier linear SVM\n"
+            "Target: is_fraud\n"
             "Frequency encoding: job, zip\n"
-            "Target usage: is_fraud is kept only for validation metrics",
-            title="Unsupervised SVM Training",
+            "Threshold tuning: validation split",
+            title="Supervised SVM Training",
             border_style="cyan",
         )
     )
@@ -371,25 +420,23 @@ def main() -> None:
     frequency_maps, total_rows = compute_frequency_maps(args.input, args.chunksize)
     console.log(f"Rows found: {total_rows:,}")
 
-    tuning_sample = sample_training_data(
+    dataframe = load_training_data(
         args.input,
-        args.tuning_sample_size,
+        args.training_sample_size,
         total_rows,
         args.chunksize,
         args.random_state,
     )
-    features, target = prepare_features(tuning_sample, frequency_maps)
+    features, target = prepare_features(dataframe, frequency_maps)
     if target is None:
-        raise ValueError(f"{TARGET_COLUMN} column is required for validation metrics.")
+        raise ValueError(f"{TARGET_COLUMN} column is required for supervised training.")
 
-    feature_columns = list(features.columns)
-    fraud_count = int(target.sum())
     console.log(
-        f"Tuning sample rows: {len(features):,} | fraud labels for evaluation: {fraud_count:,}"
+        f"Training rows loaded: {len(features):,} | fraud labels: {int(target.sum()):,}"
     )
 
     param_grid = get_param_grid(args.param_preset)
-    best_params, tuning_results = tune_hyperparameters(
+    best_params, best_threshold, tuning_results = tune_hyperparameters(
         features,
         target,
         param_grid,
@@ -398,26 +445,27 @@ def main() -> None:
     )
     print_tuning_results(tuning_results)
     console.print(f"[bold green]Selected params:[/bold green] {best_params}")
+    console.print(f"[bold green]Selected threshold:[/bold green] {best_threshold:.6f}")
 
-    final_model, trained_rows = fit_final_model(
-        args.input,
-        frequency_maps,
-        feature_columns,
-        best_params,
-        args.chunksize,
-        args.random_state,
-        args.final_max_rows,
-    )
+    final_model = fit_final_model(features, target, best_params, args.random_state)
+    artifact = {
+        "model_type": "supervised_sgd_svm",
+        "model": final_model,
+        "threshold": best_threshold,
+        "feature_columns": list(features.columns),
+        "params": best_params,
+        "target_column": TARGET_COLUMN,
+    }
 
     if args.dry_run:
         console.print(
-            f"[yellow]Dry run completed. Model was fitted on {trained_rows:,} rows but not saved.[/yellow]"
+            f"[yellow]Dry run completed. Model was fitted on {len(features):,} rows but not saved.[/yellow]"
         )
         return
 
     args.model_path.parent.mkdir(parents=True, exist_ok=True)
-    dump(final_model, args.model_path)
-    console.print(f"[bold green]Model saved:[/bold green] {args.model_path}")
+    dump(artifact, args.model_path)
+    console.print(f"[bold green]Model artifact saved:[/bold green] {args.model_path}")
 
 
 if __name__ == "__main__":

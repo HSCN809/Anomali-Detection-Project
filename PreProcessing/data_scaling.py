@@ -16,11 +16,14 @@ import matplotlib.pyplot as plt
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 INPUT_DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted.csv"
+SAMPLED_OUTPUT_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted_sampled_50k.csv"
 TRAIN_OUTPUT_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted_scaled_train.csv"
 TEST_OUTPUT_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted_scaled_test.csv"
 OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
 
 TARGET_COLUMN = "is_fraud"
+SAMPLE_SIZE = 50_000
+FRAUD_SAMPLE_RATE = 0.05
 TEST_SIZE = 0.20
 RANDOM_STATE = 42
 
@@ -51,6 +54,43 @@ def load_dataset() -> pd.DataFrame:
         )
 
     return pd.read_csv(INPUT_DATASET_PATH, dtype=READ_DTYPES, low_memory=False)
+
+
+def parse_bool_series(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_bool_dtype(series):
+        return series.astype(bool)
+
+    normalized = series.astype("string").str.lower()
+    return normalized.isin(["true", "1", "yes"])
+
+
+def sample_imbalanced_dataset(dataframe: pd.DataFrame) -> pd.DataFrame:
+    target = parse_bool_series(dataframe[TARGET_COLUMN])
+    fraud_count = int(round(SAMPLE_SIZE * FRAUD_SAMPLE_RATE))
+    non_fraud_count = SAMPLE_SIZE - fraud_count
+
+    fraud_rows = dataframe[target]
+    non_fraud_rows = dataframe[~target]
+
+    if len(fraud_rows) < fraud_count:
+        raise ValueError(
+            f"Not enough fraud rows for requested sample: "
+            f"needed={fraud_count:,}, available={len(fraud_rows):,}"
+        )
+    if len(non_fraud_rows) < non_fraud_count:
+        raise ValueError(
+            f"Not enough non-fraud rows for requested sample: "
+            f"needed={non_fraud_count:,}, available={len(non_fraud_rows):,}"
+        )
+
+    sampled = pd.concat(
+        [
+            fraud_rows.sample(n=fraud_count, random_state=RANDOM_STATE),
+            non_fraud_rows.sample(n=non_fraud_count, random_state=RANDOM_STATE),
+        ],
+        ignore_index=True,
+    )
+    return sampled.sample(frac=1.0, random_state=RANDOM_STATE).reset_index(drop=True)
 
 
 def add_cyclic_features(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -202,17 +242,25 @@ def save_class_distribution_png(summary: pd.DataFrame) -> None:
 
 def build_scaling_summary(
     source_dataframe: pd.DataFrame,
+    sampled_dataframe: pd.DataFrame,
     encoded_dataframe: pd.DataFrame,
     train_dataframe: pd.DataFrame,
     test_dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
+    sampled_target = parse_bool_series(sampled_dataframe[TARGET_COLUMN])
+
     return pd.DataFrame(
         {
             "metric": [
                 "input_rows",
+                "sampled_rows",
+                "sampled_fraud_rows",
+                "sampled_non_fraud_rows",
+                "sampled_fraud_percent",
                 "source_columns",
                 "post_cyclic_columns",
                 "encoded_columns",
+                "sample_output",
                 "train_rows",
                 "test_rows",
                 "train_output",
@@ -220,9 +268,14 @@ def build_scaling_summary(
             ],
             "value": [
                 f"{len(source_dataframe):,}",
+                f"{len(sampled_dataframe):,}",
+                f"{int(sampled_target.sum()):,}",
+                f"{int((~sampled_target).sum()):,}",
+                f"{sampled_target.mean() * 100:.2f}%",
                 f"{len(source_dataframe.columns):,}",
                 f"{len(encoded_dataframe.columns):,}",
                 "6 cyclic columns",
+                "DataSet/fraud_transformed_reducted_sampled_50k.csv",
                 f"{len(train_dataframe):,}",
                 f"{len(test_dataframe):,}",
                 "DataSet/fraud_transformed_reducted_scaled_train.csv",
@@ -240,7 +293,7 @@ def build_operation_report() -> pd.DataFrame:
             {
                 "column": column,
                 "operation": "cyclic encoding",
-                "fit_scope": "full dataset",
+                "fit_scope": "sampled dataset",
             }
         )
 
@@ -299,12 +352,14 @@ def build_class_distribution(
 
 def export_scaling_analysis(
     source_dataframe: pd.DataFrame,
+    sampled_dataframe: pd.DataFrame,
     encoded_dataframe: pd.DataFrame,
     train_dataframe: pd.DataFrame,
     test_dataframe: pd.DataFrame,
 ) -> None:
     summary = build_scaling_summary(
         source_dataframe,
+        sampled_dataframe,
         encoded_dataframe,
         train_dataframe,
         test_dataframe,
@@ -333,24 +388,34 @@ def export_scaling_analysis(
 
 def main() -> None:
     dataframe = load_dataset()
-    encoded_dataframe = add_cyclic_features(dataframe)
+    sampled_dataframe = sample_imbalanced_dataset(dataframe)
+    encoded_dataframe = add_cyclic_features(sampled_dataframe)
     train_dataframe, test_dataframe = split_dataset(encoded_dataframe)
     scaled_train, scaled_test = apply_scaling(train_dataframe, test_dataframe)
 
+    save_dataset(sampled_dataframe, SAMPLED_OUTPUT_PATH)
     save_dataset(scaled_train, TRAIN_OUTPUT_PATH)
     save_dataset(scaled_test, TEST_OUTPUT_PATH)
 
     console.print(
         Panel.fit(
             f"[bold]Input:[/bold] {INPUT_DATASET_PATH}\n"
+            f"[bold]Sample output:[/bold] {SAMPLED_OUTPUT_PATH}\n"
             f"[bold]Train output:[/bold] {TRAIN_OUTPUT_PATH}\n"
             f"[bold]Test output:[/bold] {TEST_OUTPUT_PATH}\n"
+            f"[bold]Sample:[/bold] {SAMPLE_SIZE:,} rows, {FRAUD_SAMPLE_RATE:.0%} fraud\n"
             f"[bold]Split:[/bold] 80/20 stratified",
             title="Data Scaling",
             border_style="cyan",
         )
     )
-    export_scaling_analysis(dataframe, encoded_dataframe, scaled_train, scaled_test)
+    export_scaling_analysis(
+        dataframe,
+        sampled_dataframe,
+        encoded_dataframe,
+        scaled_train,
+        scaled_test,
+    )
 
 
 if __name__ == "__main__":

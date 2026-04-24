@@ -38,12 +38,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TRAIN_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_scaled_train.csv"
 DEFAULT_TEST_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_scaled_test.csv"
 DEFAULT_REDUCED_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted.csv"
-DEFAULT_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "rbf_sgd_oneclass_svm_model.pkl"
+DEFAULT_SAMPLED_SOURCE_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_sampled_50k.csv"
+DEFAULT_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_sgd_svm_model.pkl"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "Model Training" / "evaluation_outputs"
 
 TEST_SIZE = 0.20
+SOURCE_SAMPLE_SIZE = 50_000
+SOURCE_FRAUD_RATE = 0.05
 RANDOM_STATE = 42
-RECALL_TARGET = 0.90
+RECALL_TARGET = 0.80
 FPR_TARGET = 0.02
 
 console = Console()
@@ -56,9 +59,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train", type=Path, default=DEFAULT_TRAIN_PATH)
     parser.add_argument("--test", type=Path, default=DEFAULT_TEST_PATH)
     parser.add_argument("--reduced", type=Path, default=DEFAULT_REDUCED_PATH)
+    parser.add_argument("--sampled-source", type=Path, default=DEFAULT_SAMPLED_SOURCE_PATH)
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--chunksize", type=int, default=300_000)
+    parser.add_argument("--eval-sample-size", type=int, default=None)
+    parser.add_argument("--random-state", type=int, default=RANDOM_STATE)
     parser.add_argument("--inference-sample-size", type=int, default=10_000)
     return parser.parse_args()
 
@@ -82,7 +88,43 @@ def load_test_dataset(path: Path) -> pd.DataFrame:
     )
 
 
-def reconstruct_original_test_amounts(reduced_path: Path, expected_target: pd.Series) -> pd.Series:
+def sample_imbalanced_source(dataframe: pd.DataFrame) -> pd.DataFrame:
+    target = parse_bool_series(dataframe[TARGET_COLUMN])
+    fraud_count = int(round(SOURCE_SAMPLE_SIZE * SOURCE_FRAUD_RATE))
+    non_fraud_count = SOURCE_SAMPLE_SIZE - fraud_count
+
+    fraud_rows = dataframe[target]
+    non_fraud_rows = dataframe[~target]
+
+    if len(fraud_rows) < fraud_count:
+        raise ValueError(
+            f"Not enough fraud rows for requested source sample: "
+            f"needed={fraud_count:,}, available={len(fraud_rows):,}"
+        )
+    if len(non_fraud_rows) < non_fraud_count:
+        raise ValueError(
+            f"Not enough non-fraud rows for requested source sample: "
+            f"needed={non_fraud_count:,}, available={len(non_fraud_rows):,}"
+        )
+
+    sampled = pd.concat(
+        [
+            fraud_rows.sample(n=fraud_count, random_state=RANDOM_STATE),
+            non_fraud_rows.sample(n=non_fraud_count, random_state=RANDOM_STATE),
+        ],
+        ignore_index=True,
+    )
+    return sampled.sample(frac=1.0, random_state=RANDOM_STATE).reset_index(drop=True)
+
+
+def load_sampled_source(reduced_path: Path, sampled_source_path: Path) -> pd.DataFrame:
+    if sampled_source_path.exists():
+        return pd.read_csv(
+            sampled_source_path,
+            usecols=["amt", TARGET_COLUMN],
+            low_memory=False,
+        )
+
     if not reduced_path.exists():
         raise FileNotFoundError(f"Reduced dataset not found: {reduced_path}")
 
@@ -91,6 +133,15 @@ def reconstruct_original_test_amounts(reduced_path: Path, expected_target: pd.Se
         usecols=["amt", TARGET_COLUMN],
         low_memory=False,
     )
+    return sample_imbalanced_source(reduced)
+
+
+def reconstruct_original_test_amounts(
+    reduced_path: Path,
+    sampled_source_path: Path,
+    expected_target: pd.Series,
+) -> pd.Series:
+    reduced = load_sampled_source(reduced_path, sampled_source_path)
     reduced[TARGET_COLUMN] = parse_bool_series(reduced[TARGET_COLUMN])
 
     _, original_test = train_test_split(
@@ -112,29 +163,105 @@ def reconstruct_original_test_amounts(reduced_path: Path, expected_target: pd.Se
     ):
         raise ValueError(
             "Original amount reconstruction does not align with scaled test labels. "
-            "Re-run PreProcessing/data_scaling.py if the split files were regenerated differently."
+            "Re-run PreProcessing/data_scaling.py if the sampled/split files were regenerated differently."
         )
 
     return original_test["amt"].reset_index(drop=True)
 
 
-def get_feature_columns(model, prepared_features: pd.DataFrame) -> list[str]:
-    rbf_sampler = model.named_steps["rbf_sampler"]
-    if hasattr(rbf_sampler, "feature_names_in_"):
-        return list(rbf_sampler.feature_names_in_)
+def sample_evaluation_set(
+    features: pd.DataFrame,
+    target: pd.Series,
+    original_amounts: pd.Series,
+    sample_size: int | None,
+    random_state: int,
+) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
+    if sample_size is None or sample_size >= len(features):
+        return (
+            features.reset_index(drop=True),
+            target.reset_index(drop=True),
+            original_amounts.reset_index(drop=True),
+        )
+
+    all_index = features.index.to_numpy()
+    stratify = target if target.nunique() == 2 else None
+    sample_index, _ = train_test_split(
+        all_index,
+        train_size=sample_size,
+        random_state=random_state,
+        stratify=stratify,
+    )
+
+    return (
+        features.loc[sample_index].reset_index(drop=True),
+        target.loc[sample_index].reset_index(drop=True),
+        original_amounts.loc[sample_index].reset_index(drop=True),
+    )
+
+
+def unpack_model_artifact(loaded_artifact) -> tuple[object, dict]:
+    if isinstance(loaded_artifact, dict) and "model" in loaded_artifact:
+        return loaded_artifact["model"], loaded_artifact
+
+    return loaded_artifact, {
+        "model_type": "unsupervised",
+        "threshold": None,
+        "feature_columns": None,
+    }
+
+
+def get_feature_columns(
+    model,
+    artifact: dict,
+    prepared_features: pd.DataFrame,
+) -> list[str]:
+    if artifact.get("feature_columns"):
+        return list(artifact["feature_columns"])
+
+    if hasattr(model, "named_steps") and "rbf_sampler" in model.named_steps:
+        rbf_sampler = model.named_steps["rbf_sampler"]
+        if hasattr(rbf_sampler, "feature_names_in_"):
+            return list(rbf_sampler.feature_names_in_)
+
+    if hasattr(model, "feature_names_in_"):
+        return list(model.feature_names_in_)
 
     return list(prepared_features.columns)
 
 
-def predict_with_timing(model, features: pd.DataFrame, sample_size: int) -> tuple[np.ndarray, np.ndarray, float]:
+def score_features(model, features: pd.DataFrame, model_type: str) -> np.ndarray:
+    if model_type.startswith("supervised"):
+        if hasattr(model, "decision_function"):
+            return model.decision_function(features)
+
+        probabilities = model.predict_proba(features)
+        return probabilities[:, 1]
+
+    return -model.decision_function(features)
+
+
+def predict_with_timing(
+    model,
+    features: pd.DataFrame,
+    sample_size: int,
+    model_type: str,
+    threshold: float | None,
+) -> tuple[np.ndarray, np.ndarray, float]:
     sample = features.head(min(sample_size, len(features)))
     start = time.perf_counter()
-    model.predict(sample)
+    score_features(model, sample, model_type)
     elapsed = time.perf_counter() - start
     per_transaction_ms = (elapsed / len(sample)) * 1000
 
-    scores = -model.decision_function(features)
-    predictions = model.predict(features) == -1
+    scores = score_features(model, features, model_type)
+    if model_type.startswith("supervised"):
+        if threshold is None:
+            predictions = model.predict(features).astype(bool)
+        else:
+            predictions = scores >= threshold
+    else:
+        predictions = scores >= (0.0 if threshold is None else threshold)
+
     return scores, predictions, per_transaction_ms
 
 
@@ -461,13 +588,18 @@ def main() -> None:
         Panel.fit(
             f"[bold]Model:[/bold] {args.model}\n"
             f"[bold]Test data:[/bold] {args.test}\n"
+            f"[bold]Sampled source:[/bold] {args.sampled_source}\n"
             f"[bold]Output dir:[/bold] {args.output_dir}",
             title="Model Evaluation",
             border_style="cyan",
         )
     )
 
-    model = load(args.model)
+    loaded_artifact = load(args.model)
+    model, artifact = unpack_model_artifact(loaded_artifact)
+    model_type = str(artifact.get("model_type", "unsupervised"))
+    threshold = artifact.get("threshold")
+
     frequency_maps, train_rows = compute_frequency_maps(args.train, args.chunksize)
     console.log(f"Frequency maps rebuilt from train rows: {train_rows:,}")
 
@@ -476,18 +608,33 @@ def main() -> None:
     if y_true is None:
         raise ValueError(f"{TARGET_COLUMN} column is required for evaluation.")
 
-    feature_columns = get_feature_columns(model, prepared_without_order)
+    feature_columns = get_feature_columns(model, artifact, prepared_without_order)
     features, y_true = prepare_features(
         test_dataframe,
         frequency_maps,
         feature_columns=feature_columns,
     )
-    original_amounts = reconstruct_original_test_amounts(args.reduced, y_true)
+    original_amounts = reconstruct_original_test_amounts(
+        args.reduced,
+        args.sampled_source,
+        y_true,
+    )
+    features, y_true, original_amounts = sample_evaluation_set(
+        features,
+        y_true,
+        original_amounts,
+        args.eval_sample_size,
+        args.random_state,
+    )
+    if args.eval_sample_size is not None:
+        console.log(f"Evaluation sample rows: {len(features):,}")
 
     scores, predictions, inference_time_ms = predict_with_timing(
         model,
         features,
         args.inference_sample_size,
+        model_type,
+        threshold,
     )
     metrics = calculate_metrics(y_true, predictions, scores, original_amounts)
     metrics["inference_time_ms_per_transaction"] = inference_time_ms
