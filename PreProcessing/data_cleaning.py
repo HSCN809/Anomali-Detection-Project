@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_merged.csv"
 OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
-MISSING_VALUES_IMAGE_PATH = OUTPUT_DIR / "missing_value_analysis.png"
+SYNTHETIC_OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
 NUMERIC_IMPUTE_COLUMNS = [
     "amt",
     "lat",
@@ -50,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze and optionally clean missing values.")
     parser.add_argument("--input", type=Path, default=DATASET_PATH)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--nrows", type=int, default=None)
     return parser.parse_args()
 
@@ -94,6 +95,12 @@ def save_cleaned_dataset(dataframe: pd.DataFrame, output_path: Path) -> None:
     temp_output_path.replace(output_path)
 
 
+def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
+    if explicit_output_dir is not None:
+        return explicit_output_dir
+    return SYNTHETIC_OUTPUT_DIR if "synthetic" in path.stem.lower() else OUTPUT_DIR
+
+
 def build_missing_values_summary(dataframe: pd.DataFrame) -> pd.DataFrame:
     missing_values = dataframe.isnull().sum().sort_values(ascending=False)
     total_rows = len(dataframe)
@@ -126,8 +133,9 @@ def print_missing_values_table(summary: pd.DataFrame) -> None:
     console.print(table)
 
 
-def export_missing_values_png(summary: pd.DataFrame) -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def export_missing_values_png(summary: pd.DataFrame, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    image_path = output_dir / "missing_value_analysis.png"
 
     figure_height = max(4.5, len(summary) * 0.34 + 1.5)
     figure, axis = plt.subplots(figsize=(8.4, figure_height), dpi=150)
@@ -171,18 +179,19 @@ def export_missing_values_png(summary: pd.DataFrame) -> None:
             cell.set_text_props(color="#f4f4f5", ha="right")
 
     figure.savefig(
-        MISSING_VALUES_IMAGE_PATH,
+        image_path,
         bbox_inches="tight",
         facecolor=figure.get_facecolor(),
     )
     plt.close(figure)
 
-    console.print(f"[green]PNG exported:[/green] {MISSING_VALUES_IMAGE_PATH}")
+    console.print(f"[green]PNG exported:[/green] {image_path}")
 
 
 def main() -> None:
     args = parse_args()
     dataframe = load_dataset(args.input, args.nrows)
+    output_dir = resolve_output_dir(args.input, args.output_dir)
     missing_values_summary = build_missing_values_summary(dataframe)
 
     console.print(
@@ -197,7 +206,7 @@ def main() -> None:
     )
 
     print_missing_values_table(missing_values_summary)
-    export_missing_values_png(missing_values_summary)
+    export_missing_values_png(missing_values_summary, output_dir)
 
     if args.output is not None:
         cleaned_dataframe = clean_missing_values(dataframe)

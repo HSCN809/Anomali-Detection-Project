@@ -16,6 +16,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 INPUT_DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_transformed.csv"
 OUTPUT_DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted.csv"
 OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
+SYNTHETIC_OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
 
 COLUMNS_TO_DROP = [
     "Unnamed: 0",
@@ -49,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Drop high-cardinality/raw columns.")
     parser.add_argument("--input", type=Path, default=INPUT_DATASET_PATH)
     parser.add_argument("--output", type=Path, default=OUTPUT_DATASET_PATH)
+    parser.add_argument("--output-dir", type=Path, default=None)
     return parser.parse_args()
 
 
@@ -60,6 +62,12 @@ def load_dataset(path: Path) -> pd.DataFrame:
         )
 
     return pd.read_csv(path, dtype=READ_DTYPES, low_memory=False)
+
+
+def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
+    if explicit_output_dir is not None:
+        return explicit_output_dir
+    return SYNTHETIC_OUTPUT_DIR if "synthetic" in path.stem.lower() else OUTPUT_DIR
 
 
 def reduce_dataset(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -154,9 +162,9 @@ def print_table(dataframe: pd.DataFrame, title: str) -> None:
     console.print(table)
 
 
-def save_table_png(dataframe: pd.DataFrame, title: str, filename: str) -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUT_DIR / filename
+def save_table_png(dataframe: pd.DataFrame, title: str, filename: str, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / filename
 
     figure_height = max(3.5, len(dataframe) * 0.35 + 1.4)
     figure_width = max(8, len(dataframe.columns) * 2.6)
@@ -198,24 +206,27 @@ def export_reduction_analysis(
     original_dataframe: pd.DataFrame,
     reduced_dataframe: pd.DataFrame,
     output_path: Path,
+    output_dir: Path,
 ) -> None:
     summary = build_reduction_summary(original_dataframe, reduced_dataframe, output_path)
     column_report = build_column_report(original_dataframe, reduced_dataframe)
 
     print_table(summary, "Data Reduction Summary")
-    save_table_png(summary, "Data Reduction Summary", "reduction_summary.png")
+    save_table_png(summary, "Data Reduction Summary", "reduction_summary.png", output_dir)
 
     print_table(column_report, "Data Reduction Column Report")
     save_table_png(
         column_report,
         "Data Reduction Column Report",
         "reduction_column_report.png",
+        output_dir,
     )
 
 
 def main() -> None:
     args = parse_args()
     original_dataframe = load_dataset(args.input)
+    output_dir = resolve_output_dir(args.input, args.output_dir)
     reduced_dataframe = reduce_dataset(original_dataframe)
     save_reduced_dataset(reduced_dataframe, args.output)
 
@@ -229,7 +240,7 @@ def main() -> None:
             border_style="cyan",
         )
     )
-    export_reduction_analysis(original_dataframe, reduced_dataframe, args.output)
+    export_reduction_analysis(original_dataframe, reduced_dataframe, args.output, output_dir)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ SAMPLED_OUTPUT_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted_sampled
 TRAIN_OUTPUT_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted_scaled_train.csv"
 TEST_OUTPUT_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted_scaled_test.csv"
 OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
+SYNTHETIC_OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
 
 TARGET_COLUMN = "is_fraud"
 SAMPLE_SIZE = 50_000
@@ -53,6 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-output", type=Path, default=SAMPLED_OUTPUT_PATH)
     parser.add_argument("--train-output", type=Path, default=TRAIN_OUTPUT_PATH)
     parser.add_argument("--test-output", type=Path, default=TEST_OUTPUT_PATH)
+    parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--sample-size", type=int, default=SAMPLE_SIZE)
     parser.add_argument("--fraud-sample-rate", type=float, default=FRAUD_SAMPLE_RATE)
     parser.add_argument(
@@ -71,6 +73,12 @@ def load_dataset(path: Path) -> pd.DataFrame:
         )
 
     return pd.read_csv(path, dtype=READ_DTYPES, low_memory=False)
+
+
+def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
+    if explicit_output_dir is not None:
+        return explicit_output_dir
+    return SYNTHETIC_OUTPUT_DIR if "synthetic" in path.stem.lower() else OUTPUT_DIR
 
 
 def parse_bool_series(series: pd.Series) -> pd.Series:
@@ -196,9 +204,9 @@ def print_table(dataframe: pd.DataFrame, title: str) -> None:
     console.print(table)
 
 
-def save_table_png(dataframe: pd.DataFrame, title: str, filename: str) -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUT_DIR / filename
+def save_table_png(dataframe: pd.DataFrame, title: str, filename: str, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / filename
 
     figure_height = max(3.5, len(dataframe) * 0.36 + 1.4)
     figure_width = max(8, len(dataframe.columns) * 2.8)
@@ -235,9 +243,9 @@ def save_table_png(dataframe: pd.DataFrame, title: str, filename: str) -> None:
     console.print(f"[green]PNG exported:[/green] {output_path}")
 
 
-def save_class_distribution_png(summary: pd.DataFrame) -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUT_DIR / "scaling_train_test_class_distribution.png"
+def save_class_distribution_png(summary: pd.DataFrame, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "scaling_train_test_class_distribution.png"
 
     plot_data = summary.pivot(index="split", columns="is_fraud", values="percent")
     figure, axis = plt.subplots(figsize=(8.5, 5), dpi=150)
@@ -383,6 +391,7 @@ def export_scaling_analysis(
     sample_output_path: Path,
     train_output_path: Path,
     test_output_path: Path,
+    output_dir: Path,
 ) -> None:
     summary = build_scaling_summary(
         source_dataframe,
@@ -398,13 +407,14 @@ def export_scaling_analysis(
     class_distribution = build_class_distribution(train_dataframe, test_dataframe)
 
     print_table(summary, "Data Scaling Summary")
-    save_table_png(summary, "Data Scaling Summary", "scaling_summary.png")
+    save_table_png(summary, "Data Scaling Summary", "scaling_summary.png", output_dir)
 
     print_table(operation_report, "Data Scaling Operation Report")
     save_table_png(
         operation_report,
         "Data Scaling Operation Report",
         "scaling_operation_report.png",
+        output_dir,
     )
 
     print_table(class_distribution, "Train/Test Class Distribution")
@@ -412,13 +422,15 @@ def export_scaling_analysis(
         class_distribution,
         "Train/Test Class Distribution",
         "scaling_train_test_class_distribution_table.png",
+        output_dir,
     )
-    save_class_distribution_png(class_distribution)
+    save_class_distribution_png(class_distribution, output_dir)
 
 
 def main() -> None:
     args = parse_args()
     dataframe = load_dataset(args.input)
+    output_dir = resolve_output_dir(args.input, args.output_dir)
     sampled_dataframe = (
         dataframe.reset_index(drop=True)
         if args.no_sample
@@ -463,6 +475,7 @@ def main() -> None:
         args.sample_output,
         args.train_output,
         args.test_output,
+        output_dir,
     )
 
 

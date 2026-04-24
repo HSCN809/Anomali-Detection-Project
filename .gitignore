@@ -5,6 +5,7 @@ DataSet/*.csv
 DataSet/.complete/
 .venv/
 prep_outputs/
+synthetic_prep_outputs/
 eda_outputs/
 models/
 evaluation_outputs/

@@ -17,6 +17,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_merged.csv"
 TRANSFORMED_DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_transformed.csv"
 OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
+SYNTHETIC_OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
 
 TIME_COLUMN = "unix_time"
 DOB_COLUMN = "dob"
@@ -33,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Transform raw fraud transaction data.")
     parser.add_argument("--input", type=Path, default=DATASET_PATH)
     parser.add_argument("--output", type=Path, default=TRANSFORMED_DATASET_PATH)
+    parser.add_argument("--output-dir", type=Path, default=None)
     return parser.parse_args()
 
 
@@ -44,6 +46,12 @@ def load_dataset(path: Path) -> pd.DataFrame:
         )
 
     return pd.read_csv(path, low_memory=False)
+
+
+def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
+    if explicit_output_dir is not None:
+        return explicit_output_dir
+    return SYNTHETIC_OUTPUT_DIR if "synthetic" in path.stem.lower() else OUTPUT_DIR
 
 
 def add_time_features(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -157,9 +165,9 @@ def print_summary_table(summary: pd.DataFrame, title: str) -> None:
     console.print(table)
 
 
-def save_table_png(summary: pd.DataFrame, title: str, filename: str) -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUT_DIR / filename
+def save_table_png(summary: pd.DataFrame, title: str, filename: str, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / filename
 
     figure_height = max(3.5, len(summary) * 0.38 + 1.2)
     figure_width = max(8, len(summary.columns) * 2.4)
@@ -203,9 +211,10 @@ def save_bar_chart(
     xlabel: str,
     ylabel: str,
     filename: str,
+    output_dir: Path,
 ) -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUT_DIR / filename
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / filename
 
     figure, axis = plt.subplots(figsize=(10, 5.5), dpi=150)
     figure.patch.set_facecolor("#111315")
@@ -236,9 +245,9 @@ def save_bar_chart(
     console.print(f"[green]PNG exported:[/green] {output_path}")
 
 
-def save_distance_histogram(dataframe: pd.DataFrame) -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUT_DIR / "transformation_distance_distribution.png"
+def save_distance_histogram(dataframe: pd.DataFrame, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "transformation_distance_distribution.png"
 
     figure, axis = plt.subplots(figsize=(10, 5.5), dpi=150)
     figure.patch.set_facecolor("#111315")
@@ -274,7 +283,11 @@ def build_distance_bucket_fraud_rate(dataframe: pd.DataFrame) -> pd.Series:
     return dataframe.groupby(distance_bucket, observed=True)[TARGET_COLUMN].mean()
 
 
-def export_transformation_analysis(dataframe: pd.DataFrame, output_path: Path) -> None:
+def export_transformation_analysis(
+    dataframe: pd.DataFrame,
+    output_path: Path,
+    output_dir: Path,
+) -> None:
     summary = pd.DataFrame(
         {
             "metric": [
@@ -298,7 +311,7 @@ def export_transformation_analysis(dataframe: pd.DataFrame, output_path: Path) -
         }
     )
     print_summary_table(summary, "Data Transformation Summary")
-    save_table_png(summary, "Data Transformation Summary", "transformation_summary.png")
+    save_table_png(summary, "Data Transformation Summary", "transformation_summary.png", output_dir)
 
     encoded_columns = pd.DataFrame(
         {
@@ -314,6 +327,7 @@ def export_transformation_analysis(dataframe: pd.DataFrame, output_path: Path) -
         encoded_columns,
         "Encoded Columns",
         "transformation_encoded_columns.png",
+        output_dir,
     )
 
     hourly_fraud_rate = dataframe.groupby("transaction_hour")[TARGET_COLUMN].mean()
@@ -323,6 +337,7 @@ def export_transformation_analysis(dataframe: pd.DataFrame, output_path: Path) -
         xlabel="Transaction Hour",
         ylabel="Fraud Rate",
         filename="transformation_fraud_rate_by_hour.png",
+        output_dir=output_dir,
     )
 
     day_fraud_rate = dataframe.groupby("transaction_day_of_week")[TARGET_COLUMN].mean()
@@ -334,6 +349,7 @@ def export_transformation_analysis(dataframe: pd.DataFrame, output_path: Path) -
         xlabel="Day of Week",
         ylabel="Fraud Rate",
         filename="transformation_fraud_rate_by_day_of_week.png",
+        output_dir=output_dir,
     )
 
     distance_bucket_fraud_rate = build_distance_bucket_fraud_rate(dataframe)
@@ -343,13 +359,15 @@ def export_transformation_analysis(dataframe: pd.DataFrame, output_path: Path) -
         xlabel="Distance Bucket (km)",
         ylabel="Fraud Rate",
         filename="transformation_fraud_rate_by_distance_bucket.png",
+        output_dir=output_dir,
     )
-    save_distance_histogram(dataframe)
+    save_distance_histogram(dataframe, output_dir)
 
 
 def main() -> None:
     args = parse_args()
     dataframe = load_dataset(args.input)
+    output_dir = resolve_output_dir(args.input, args.output_dir)
     transformed_dataframe = transform_dataset(dataframe)
     save_transformed_dataset(transformed_dataframe, args.output)
 
@@ -363,7 +381,7 @@ def main() -> None:
             border_style="cyan",
         )
     )
-    export_transformation_analysis(transformed_dataframe, args.output)
+    export_transformation_analysis(transformed_dataframe, args.output, output_dir)
 
 
 if __name__ == "__main__":
