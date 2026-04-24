@@ -40,6 +40,7 @@ DEFAULT_TEST_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_scale
 DEFAULT_REDUCED_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted.csv"
 DEFAULT_SAMPLED_SOURCE_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_sampled_50k.csv"
 DEFAULT_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_sgd_svm_model.pkl"
+DEFAULT_KERNEL_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_rbf_svm_model.pkl"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "Model Training" / "evaluation_outputs"
 
 TEST_SIZE = 0.20
@@ -61,12 +62,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reduced", type=Path, default=DEFAULT_REDUCED_PATH)
     parser.add_argument("--sampled-source", type=Path, default=DEFAULT_SAMPLED_SOURCE_PATH)
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
+    parser.add_argument("--kernel-model", type=Path, default=DEFAULT_KERNEL_MODEL_PATH)
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=["linear", "kernel", "both"],
+        default=["both"],
+        help="Which model artifact(s) to evaluate. Default evaluates both linear and RBF kernel SVM.",
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--chunksize", type=int, default=300_000)
     parser.add_argument("--eval-sample-size", type=int, default=None)
     parser.add_argument("--random-state", type=int, default=RANDOM_STATE)
     parser.add_argument("--inference-sample-size", type=int, default=10_000)
     return parser.parse_args()
+
+
+def selected_model_paths(args: argparse.Namespace) -> list[Path]:
+    selected = {"linear", "kernel"} if "both" in args.models else set(args.models)
+    paths = []
+    if "linear" in selected:
+        paths.append(args.model)
+    if "kernel" in selected:
+        paths.append(args.kernel_model)
+    return paths
 
 
 def parse_bool_series(series: pd.Series) -> pd.Series:
@@ -353,7 +372,7 @@ def format_metric_value(metric: str, value: float) -> str:
     return f"{value:.4f}"
 
 
-def print_summary_table(metrics: dict[str, float]) -> pd.DataFrame:
+def print_summary_table(metrics: dict[str, float], title: str) -> pd.DataFrame:
     ordered_metrics = [
         "tn",
         "fp",
@@ -379,7 +398,7 @@ def print_summary_table(metrics: dict[str, float]) -> pd.DataFrame:
         }
     )
 
-    table = Table(title="Model Evaluation Summary", header_style="bold magenta")
+    table = Table(title=title, header_style="bold magenta")
     table.add_column("metric")
     table.add_column("value", justify="right")
     for row in summary.itertuples(index=False):
@@ -564,6 +583,8 @@ def export_pngs(
     original_amounts: pd.Series,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    summary.to_csv(output_dir / "evaluation_summary.csv", index=False)
+    threshold_report.to_csv(output_dir / "threshold_report.csv", index=False)
     save_table_png(summary, "Model Evaluation Summary", output_dir / "evaluation_summary_table.png")
     save_confusion_matrix_png(metrics, output_dir / "confusion_matrix.png")
     save_precision_recall_curve_png(y_true, scores, output_dir / "precision_recall_curve.png")
@@ -577,69 +598,75 @@ def export_pngs(
     )
 
 
-def main() -> None:
-    args = parse_args()
-    if not args.model.exists():
-        raise FileNotFoundError(f"Model file not found: {args.model}")
-    if not args.train.exists():
-        raise FileNotFoundError(f"Scaled train dataset not found: {args.train}")
+def model_output_name(model_path: Path, artifact: dict) -> str:
+    model_type = str(artifact.get("model_type", "")).lower()
+    if "rbf" in model_type or "kernel" in model_type:
+        return "kernel_rbf_svm"
+    if "sgd" in model_type or "linear" in model_type:
+        return "linear_sgd_svm"
+
+    return model_path.stem.replace("supervised_", "").replace("_model", "")
+
+
+def evaluate_model(
+    *,
+    model_path: Path,
+    base_output_dir: Path,
+    test_dataframe: pd.DataFrame,
+    prepared_without_order: pd.DataFrame,
+    y_true: pd.Series,
+    original_amounts: pd.Series,
+    frequency_maps: dict[str, dict[str, float]],
+    eval_sample_size: int | None,
+    random_state: int,
+    inference_sample_size: int,
+) -> None:
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+
+    loaded_artifact = load(model_path)
+    model, artifact = unpack_model_artifact(loaded_artifact)
+    model_type = str(artifact.get("model_type", "unsupervised"))
+    threshold = artifact.get("threshold")
+    output_dir = base_output_dir / model_output_name(model_path, artifact)
 
     console.print(
         Panel.fit(
-            f"[bold]Model:[/bold] {args.model}\n"
-            f"[bold]Test data:[/bold] {args.test}\n"
-            f"[bold]Sampled source:[/bold] {args.sampled_source}\n"
-            f"[bold]Output dir:[/bold] {args.output_dir}",
+            f"[bold]Model:[/bold] {model_path}\n"
+            f"[bold]Model type:[/bold] {model_type}\n"
+            f"[bold]Output dir:[/bold] {output_dir}",
             title="Model Evaluation",
             border_style="cyan",
         )
     )
 
-    loaded_artifact = load(args.model)
-    model, artifact = unpack_model_artifact(loaded_artifact)
-    model_type = str(artifact.get("model_type", "unsupervised"))
-    threshold = artifact.get("threshold")
-
-    frequency_maps, train_rows = compute_frequency_maps(args.train, args.chunksize)
-    console.log(f"Frequency maps rebuilt from train rows: {train_rows:,}")
-
-    test_dataframe = load_test_dataset(args.test)
-    prepared_without_order, y_true = prepare_features(test_dataframe, frequency_maps)
-    if y_true is None:
-        raise ValueError(f"{TARGET_COLUMN} column is required for evaluation.")
-
     feature_columns = get_feature_columns(model, artifact, prepared_without_order)
-    features, y_true = prepare_features(
+    features, y_true_ordered = prepare_features(
         test_dataframe,
         frequency_maps,
         feature_columns=feature_columns,
     )
-    original_amounts = reconstruct_original_test_amounts(
-        args.reduced,
-        args.sampled_source,
-        y_true,
-    )
-    features, y_true, original_amounts = sample_evaluation_set(
+    eval_features, eval_target, eval_amounts = sample_evaluation_set(
         features,
-        y_true,
+        y_true_ordered,
         original_amounts,
-        args.eval_sample_size,
-        args.random_state,
+        eval_sample_size,
+        random_state,
     )
-    if args.eval_sample_size is not None:
-        console.log(f"Evaluation sample rows: {len(features):,}")
+    if eval_sample_size is not None:
+        console.log(f"Evaluation sample rows: {len(eval_features):,}")
 
     scores, predictions, inference_time_ms = predict_with_timing(
         model,
-        features,
-        args.inference_sample_size,
+        eval_features,
+        inference_sample_size,
         model_type,
         threshold,
     )
-    metrics = calculate_metrics(y_true, predictions, scores, original_amounts)
+    metrics = calculate_metrics(eval_target, predictions, scores, eval_amounts)
     metrics["inference_time_ms_per_transaction"] = inference_time_ms
 
-    threshold_report = build_threshold_report(y_true, scores, original_amounts)
+    threshold_report = build_threshold_report(eval_target, scores, eval_amounts)
     operating_threshold = select_operating_threshold(threshold_report)
     if operating_threshold is None:
         console.print(
@@ -655,17 +682,70 @@ def main() -> None:
             f"precision={operating_threshold['precision']:.4f}"
         )
 
-    summary = print_summary_table(metrics)
+    summary = print_summary_table(
+        metrics,
+        f"{model_output_name(model_path, artifact)} Evaluation Summary",
+    )
     export_pngs(
-        args.output_dir,
+        output_dir,
         summary,
         metrics,
-        y_true,
+        eval_target,
         scores,
         threshold_report,
-        original_amounts,
+        eval_amounts,
     )
-    console.print(f"[green]PNG outputs exported:[/green] {args.output_dir}")
+    console.print(f"[green]PNG outputs exported:[/green] {output_dir}")
+
+
+def main() -> None:
+    args = parse_args()
+    if not args.train.exists():
+        raise FileNotFoundError(f"Scaled train dataset not found: {args.train}")
+    model_paths = selected_model_paths(args)
+    missing_model_paths = [path for path in model_paths if not path.exists()]
+    if missing_model_paths:
+        missing = ", ".join(str(path) for path in missing_model_paths)
+        raise FileNotFoundError(f"Model file(s) not found: {missing}")
+
+    console.print(
+        Panel.fit(
+            f"[bold]Models:[/bold] {', '.join(str(path) for path in model_paths)}\n"
+            f"[bold]Test data:[/bold] {args.test}\n"
+            f"[bold]Sampled source:[/bold] {args.sampled_source}\n"
+            f"[bold]Output dir:[/bold] {args.output_dir}",
+            title="Model Evaluation",
+            border_style="cyan",
+        )
+    )
+
+    frequency_maps, train_rows = compute_frequency_maps(args.train, args.chunksize)
+    console.log(f"Frequency maps rebuilt from train rows: {train_rows:,}")
+
+    test_dataframe = load_test_dataset(args.test)
+    prepared_without_order, y_true = prepare_features(test_dataframe, frequency_maps)
+    if y_true is None:
+        raise ValueError(f"{TARGET_COLUMN} column is required for evaluation.")
+
+    original_amounts = reconstruct_original_test_amounts(
+        args.reduced,
+        args.sampled_source,
+        y_true,
+    )
+
+    for model_path in model_paths:
+        evaluate_model(
+            model_path=model_path,
+            base_output_dir=args.output_dir,
+            test_dataframe=test_dataframe,
+            prepared_without_order=prepared_without_order,
+            y_true=y_true,
+            original_amounts=original_amounts,
+            frequency_maps=frequency_maps,
+            eval_sample_size=args.eval_sample_size,
+            random_state=args.random_state,
+            inference_sample_size=args.inference_sample_size,
+        )
 
 
 if __name__ == "__main__":

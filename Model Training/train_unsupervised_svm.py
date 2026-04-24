@@ -22,11 +22,13 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import train_test_split
+from sklearn.svm import SVC
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_scaled_train.csv"
-DEFAULT_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_sgd_svm_model.pkl"
+DEFAULT_LINEAR_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_sgd_svm_model.pkl"
+DEFAULT_KERNEL_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_rbf_svm_model.pkl"
 
 TARGET_COLUMN = "is_fraud"
 FREQUENCY_COLUMNS = ["job", "zip"]
@@ -40,14 +42,23 @@ console = Console()
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train a supervised SGD-based linear SVM fraud classifier."
+        description="Train supervised linear and kernel SVM fraud classifiers."
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_PATH)
-    parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH)
+    parser.add_argument("--model-path", type=Path, default=DEFAULT_LINEAR_MODEL_PATH)
+    parser.add_argument("--kernel-model-path", type=Path, default=DEFAULT_KERNEL_MODEL_PATH)
     parser.add_argument("--training-sample-size", type=int, default=None)
+    parser.add_argument("--kernel-training-sample-size", type=int, default=None)
     parser.add_argument("--validation-size", type=float, default=0.2)
     parser.add_argument("--chunksize", type=int, default=200_000)
     parser.add_argument("--random-state", type=int, default=RANDOM_STATE)
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=["linear", "kernel", "both"],
+        default=["both"],
+        help="Which model(s) to train. Default trains both linear and RBF kernel SVM.",
+    )
     parser.add_argument(
         "--param-preset",
         choices=["fast", "default"],
@@ -155,7 +166,11 @@ def prepare_features(
     return frame.astype("float32"), target
 
 
-def get_param_grid(preset: str) -> list[dict[str, float | str]]:
+def selected_model_names(raw_models: list[str]) -> set[str]:
+    return {"linear", "kernel"} if "both" in raw_models else set(raw_models)
+
+
+def get_linear_param_grid(preset: str) -> list[dict[str, float | str]]:
     if preset == "fast":
         return [
             {
@@ -197,7 +212,47 @@ def build_model(params: dict[str, float | str], random_state: int) -> SGDClassif
     )
 
 
-def decision_scores(model: SGDClassifier, features: pd.DataFrame) -> np.ndarray:
+def get_kernel_param_grid(preset: str) -> list[dict[str, float | str]]:
+    if preset == "fast":
+        return [
+            {
+                "kernel": "rbf",
+                "C": 1.0,
+                "gamma": "scale",
+                "fraud_weight": 20,
+                "non_fraud_ratio": 20,
+            }
+        ]
+
+    return [
+        {
+            "kernel": "rbf",
+            "C": c_value,
+            "gamma": gamma,
+            "fraud_weight": fraud_weight,
+            "non_fraud_ratio": non_fraud_ratio,
+        }
+        for c_value, gamma, fraud_weight, non_fraud_ratio in product(
+            [0.5, 1.0, 2.0],
+            ["scale"],
+            [10, 20],
+            [20],
+        )
+    ]
+
+
+def build_kernel_model(params: dict[str, float | str], random_state: int) -> SVC:
+    return SVC(
+        kernel=str(params["kernel"]),
+        C=float(params["C"]),
+        gamma=params["gamma"],
+        class_weight={0: 1.0, 1: float(params["fraud_weight"])},
+        cache_size=1000,
+        random_state=random_state,
+    )
+
+
+def decision_scores(model, features: pd.DataFrame) -> np.ndarray:
     if hasattr(model, "decision_function"):
         return model.decision_function(features)
 
@@ -292,6 +347,8 @@ def tune_hyperparameters(
     param_grid: list[dict[str, float | str]],
     validation_size: float,
     random_state: int,
+    model_builder,
+    model_label: str,
 ) -> tuple[dict[str, float | str], float, list[dict[str, float | str]]]:
     x_train, x_valid, y_train, y_valid = train_test_split(
         features,
@@ -307,14 +364,14 @@ def tune_hyperparameters(
     best_selection_score = -math.inf
 
     for index, params in enumerate(param_grid, start=1):
-        console.log(f"Testing params {index}/{len(param_grid)}: {params}")
+        console.log(f"Testing {model_label} params {index}/{len(param_grid)}: {params}")
         sampled_x_train, sampled_y_train = undersample_training_fold(
             x_train,
             y_train,
             int(params["non_fraud_ratio"]),
             random_state + index,
         )
-        model = build_model(params, random_state)
+        model = model_builder(params, random_state)
         model.fit(sampled_x_train, sampled_y_train.astype(int))
 
         scores = decision_scores(model, x_valid)
@@ -348,56 +405,110 @@ def fit_final_model(
     target: pd.Series,
     params: dict[str, float | str],
     random_state: int,
-) -> SGDClassifier:
+    model_builder,
+):
     features, target = undersample_training_fold(
         features,
         target,
         int(params["non_fraud_ratio"]),
         random_state,
     )
-    model = build_model(params, random_state)
+    model = model_builder(params, random_state)
     model.fit(features, target.astype(int))
     return model
 
 
-def print_tuning_results(results: list[dict[str, float | str]]) -> None:
-    table = Table(title="Supervised SVM Tuning Results", show_lines=True)
-    for column in [
-        "loss",
-        "alpha",
-        "fraud_weight",
-        "non_fraud_ratio",
-        "fit_rows",
-        "threshold",
-        "recall",
-        "false_positive_rate",
-        "precision",
-        "f1",
-        "average_precision",
-        "roc_auc",
-        "predicted_fraud_rate",
-    ]:
+def print_tuning_results(results: list[dict[str, float | str]], title: str) -> None:
+    table = Table(title=title, show_lines=True)
+    columns = [
+        column
+        for column in [
+            "loss",
+            "kernel",
+            "C",
+            "gamma",
+            "alpha",
+            "fraud_weight",
+            "non_fraud_ratio",
+            "fit_rows",
+            "threshold",
+            "recall",
+            "false_positive_rate",
+            "precision",
+            "f1",
+            "average_precision",
+            "roc_auc",
+            "predicted_fraud_rate",
+        ]
+        if column in results[0]
+    ]
+    for column in columns:
         table.add_column(column, justify="right")
 
     sorted_results = sorted(results, key=lambda item: float(item["f1"]), reverse=True)
     for result in sorted_results:
-        table.add_row(
-            f"{result['loss']}",
-            f"{result['alpha']}",
-            f"{result['fraud_weight']}",
-            f"{result['non_fraud_ratio']}",
-            f"{int(result['fit_rows']):,}",
-            f"{float(result['threshold']):.6f}",
-            f"{float(result['recall']):.4f}",
-            f"{float(result['false_positive_rate']):.4f}",
-            f"{float(result['precision']):.4f}",
-            f"{float(result['f1']):.4f}",
-            f"{float(result['average_precision']):.4f}",
-            f"{float(result['roc_auc']):.4f}",
-            f"{float(result['predicted_fraud_rate']):.4f}",
-        )
+        row = []
+        for column in columns:
+            value = result[column]
+            if column == "fit_rows":
+                row.append(f"{int(value):,}")
+            elif isinstance(value, float):
+                row.append(f"{value:.6f}" if column == "threshold" else f"{value:.4f}")
+            else:
+                row.append(f"{value}")
+        table.add_row(*row)
 
     console.print(table)
+
+
+def train_and_save_model(
+    *,
+    model_label: str,
+    model_type: str,
+    features: pd.DataFrame,
+    target: pd.Series,
+    param_grid: list[dict[str, float | str]],
+    validation_size: float,
+    random_state: int,
+    model_builder,
+    model_path: Path,
+    dry_run: bool,
+) -> None:
+    best_params, best_threshold, tuning_results = tune_hyperparameters(
+        features,
+        target,
+        param_grid,
+        validation_size,
+        random_state,
+        model_builder,
+        model_label,
+    )
+    print_tuning_results(tuning_results, f"{model_label} SVM Tuning Results")
+    console.print(f"[bold green]{model_label} selected params:[/bold green] {best_params}")
+    console.print(
+        f"[bold green]{model_label} selected threshold:[/bold green] {best_threshold:.6f}"
+    )
+
+    final_model = fit_final_model(features, target, best_params, random_state, model_builder)
+    artifact = {
+        "model_type": model_type,
+        "model": final_model,
+        "threshold": best_threshold,
+        "feature_columns": list(features.columns),
+        "params": best_params,
+        "target_column": TARGET_COLUMN,
+    }
+
+    if dry_run:
+        console.print(
+            f"[yellow]{model_label} dry run completed. "
+            f"Model was fitted on {len(features):,} rows but not saved.[/yellow]"
+        )
+        return
+
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    dump(artifact, model_path)
+    console.print(f"[bold green]{model_label} model artifact saved:[/bold green] {model_path}")
 
 
 def main() -> None:
@@ -408,7 +519,7 @@ def main() -> None:
 
     console.print(
         Panel.fit(
-            "Training model: supervised SGDClassifier linear SVM\n"
+            "Training models: supervised linear SVM and RBF kernel SVM\n"
             "Target: is_fraud\n"
             "Frequency encoding: job, zip\n"
             "Threshold tuning: validation split",
@@ -435,37 +546,51 @@ def main() -> None:
         f"Training rows loaded: {len(features):,} | fraud labels: {int(target.sum()):,}"
     )
 
-    param_grid = get_param_grid(args.param_preset)
-    best_params, best_threshold, tuning_results = tune_hyperparameters(
-        features,
-        target,
-        param_grid,
-        args.validation_size,
-        args.random_state,
-    )
-    print_tuning_results(tuning_results)
-    console.print(f"[bold green]Selected params:[/bold green] {best_params}")
-    console.print(f"[bold green]Selected threshold:[/bold green] {best_threshold:.6f}")
+    models_to_train = selected_model_names(args.models)
 
-    final_model = fit_final_model(features, target, best_params, args.random_state)
-    artifact = {
-        "model_type": "supervised_sgd_svm",
-        "model": final_model,
-        "threshold": best_threshold,
-        "feature_columns": list(features.columns),
-        "params": best_params,
-        "target_column": TARGET_COLUMN,
-    }
-
-    if args.dry_run:
-        console.print(
-            f"[yellow]Dry run completed. Model was fitted on {len(features):,} rows but not saved.[/yellow]"
+    if "linear" in models_to_train:
+        train_and_save_model(
+            model_label="Linear",
+            model_type="supervised_sgd_svm",
+            features=features,
+            target=target,
+            param_grid=get_linear_param_grid(args.param_preset),
+            validation_size=args.validation_size,
+            random_state=args.random_state,
+            model_builder=build_model,
+            model_path=args.model_path,
+            dry_run=args.dry_run,
         )
-        return
 
-    args.model_path.parent.mkdir(parents=True, exist_ok=True)
-    dump(artifact, args.model_path)
-    console.print(f"[bold green]Model artifact saved:[/bold green] {args.model_path}")
+    if "kernel" in models_to_train:
+        kernel_features = features
+        kernel_target = target
+        if (
+            args.kernel_training_sample_size is not None
+            and args.kernel_training_sample_size < len(features)
+        ):
+            sample_index, _ = train_test_split(
+                features.index.to_numpy(),
+                train_size=args.kernel_training_sample_size,
+                random_state=args.random_state,
+                stratify=target,
+            )
+            kernel_features = features.loc[sample_index].reset_index(drop=True)
+            kernel_target = target.loc[sample_index].reset_index(drop=True)
+            console.log(f"Kernel training rows sampled: {len(kernel_features):,}")
+
+        train_and_save_model(
+            model_label="Kernel RBF",
+            model_type="supervised_rbf_svm",
+            features=kernel_features,
+            target=kernel_target,
+            param_grid=get_kernel_param_grid(args.param_preset),
+            validation_size=args.validation_size,
+            random_state=args.random_state,
+            model_builder=build_kernel_model,
+            model_path=args.kernel_model_path,
+            dry_run=args.dry_run,
+        )
 
 
 if __name__ == "__main__":
