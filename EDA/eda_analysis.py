@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 import matplotlib
@@ -26,19 +27,26 @@ console = Console()
 sns.set_theme(style="darkgrid")
 
 
-def get_category_columns() -> list[str]:
-    columns = pd.read_csv(DATASET_PATH, nrows=0).columns
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export EDA charts for transformed fraud data.")
+    parser.add_argument("--input", type=Path, default=DATASET_PATH)
+    parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
+    return parser.parse_args()
+
+
+def get_category_columns(dataset_path: Path) -> list[str]:
+    columns = pd.read_csv(dataset_path, nrows=0).columns
     return [column for column in columns if column.startswith(CATEGORY_PREFIX)]
 
 
-def load_dataset() -> pd.DataFrame:
-    if not DATASET_PATH.exists():
+def load_dataset(dataset_path: Path) -> pd.DataFrame:
+    if not dataset_path.exists():
         raise FileNotFoundError(
-            f"Transformed dataset not found: {DATASET_PATH}\n"
+            f"Transformed dataset not found: {dataset_path}\n"
             "Create it first with: python PreProcessing/data_transformation.py"
         )
 
-    category_columns = get_category_columns()
+    category_columns = get_category_columns(dataset_path)
     usecols = [
         "amt",
         TARGET_COLUMN,
@@ -54,16 +62,16 @@ def load_dataset() -> pd.DataFrame:
         "gender_M",
         *category_columns,
     ]
-    return pd.read_csv(DATASET_PATH, usecols=usecols, low_memory=False)
+    return pd.read_csv(dataset_path, usecols=usecols, low_memory=False)
 
 
-def ensure_output_dir() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def ensure_output_dir(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
 
 
-def save_current_figure(filename: str) -> None:
-    ensure_output_dir()
-    output_path = OUTPUT_DIR / filename
+def save_current_figure(filename: str, output_dir: Path) -> None:
+    ensure_output_dir(output_dir)
+    output_path = output_dir / filename
     plt.savefig(output_path, bbox_inches="tight", facecolor=plt.gcf().get_facecolor())
     plt.close()
     console.print(f"[green]PNG exported:[/green] {output_path}")
@@ -84,9 +92,9 @@ def create_figure(width: float = 10, height: float = 5.8):
     return figure, axis
 
 
-def save_table_png(dataframe: pd.DataFrame, title: str, filename: str) -> None:
-    ensure_output_dir()
-    output_path = OUTPUT_DIR / filename
+def save_table_png(dataframe: pd.DataFrame, title: str, filename: str, output_dir: Path) -> None:
+    ensure_output_dir(output_dir)
+    output_path = output_dir / filename
 
     figure_height = max(3.5, len(dataframe) * 0.38 + 1.4)
     figure_width = max(8, len(dataframe.columns) * 2.7)
@@ -145,7 +153,7 @@ def add_category_column(dataframe: pd.DataFrame) -> pd.DataFrame:
     return transformed
 
 
-def plot_target_distribution(dataframe: pd.DataFrame) -> None:
+def plot_target_distribution(dataframe: pd.DataFrame, output_dir: Path) -> None:
     summary = dataframe[TARGET_COLUMN].value_counts(normalize=True).sort_index() * 100
 
     _, axis = create_figure(8, 5)
@@ -163,10 +171,10 @@ def plot_target_distribution(dataframe: pd.DataFrame) -> None:
             fontsize=9,
         )
 
-    save_current_figure("eda_target_distribution.png")
+    save_current_figure("eda_target_distribution.png", output_dir)
 
 
-def plot_amount_distribution(dataframe: pd.DataFrame) -> None:
+def plot_amount_distribution(dataframe: pd.DataFrame, output_dir: Path) -> None:
     amount_cap = dataframe["amt"].quantile(0.995)
 
     _, axis = create_figure()
@@ -177,15 +185,15 @@ def plot_amount_distribution(dataframe: pd.DataFrame) -> None:
         "Amount",
         "Transaction Count",
     )
-    save_current_figure("eda_amt_distribution.png")
+    save_current_figure("eda_amt_distribution.png", output_dir)
 
     _, axis = create_figure()
     axis.hist(np.log1p(dataframe["amt"]), bins=80, color="#00d7ff")
     style_axis(axis, "Log Transaction Amount Distribution", "log1p(amount)", "Count")
-    save_current_figure("eda_amt_log_distribution.png")
+    save_current_figure("eda_amt_log_distribution.png", output_dir)
 
 
-def plot_amount_by_fraud(dataframe: pd.DataFrame) -> None:
+def plot_amount_by_fraud(dataframe: pd.DataFrame, output_dir: Path) -> None:
     plot_data = dataframe[[TARGET_COLUMN, "amt"]].copy()
     plot_data["log_amount"] = np.log1p(plot_data["amt"])
 
@@ -200,10 +208,10 @@ def plot_amount_by_fraud(dataframe: pd.DataFrame) -> None:
         ax=axis,
     )
     style_axis(axis, "Transaction Amount by Fraud Status", "is_fraud", "log1p(amount)")
-    save_current_figure("eda_amt_by_fraud_boxplot.png")
+    save_current_figure("eda_amt_by_fraud_boxplot.png", output_dir)
 
 
-def export_amount_summary(dataframe: pd.DataFrame) -> None:
+def export_amount_summary(dataframe: pd.DataFrame, output_dir: Path) -> None:
     summary = (
         dataframe.groupby(TARGET_COLUMN)["amt"]
         .agg(
@@ -222,7 +230,7 @@ def export_amount_summary(dataframe: pd.DataFrame) -> None:
     summary[numeric_columns] = summary[numeric_columns].round(2)
 
     print_table(summary, "Amount Summary by Fraud Status")
-    save_table_png(summary, "Amount Summary by Fraud Status", "eda_amt_summary_table.png")
+    save_table_png(summary, "Amount Summary by Fraud Status", "eda_amt_summary_table.png", output_dir)
 
 
 def build_category_summary(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -237,14 +245,14 @@ def build_category_summary(dataframe: pd.DataFrame) -> pd.DataFrame:
     return summary.drop(columns=["fraud_rate"])
 
 
-def plot_category_analysis(dataframe: pd.DataFrame) -> None:
+def plot_category_analysis(dataframe: pd.DataFrame, output_dir: Path) -> None:
     summary = build_category_summary(dataframe)
 
     _, axis = create_figure(12, 6.2)
     axis.bar(summary["category"], summary["fraud_rate_percent"], color="#00d7ff")
     style_axis(axis, "Fraud Rate by Spending Category", "Category", "Fraud Rate (%)")
     axis.tick_params(axis="x", rotation=45)
-    save_current_figure("eda_category_fraud_rate.png")
+    save_current_figure("eda_category_fraud_rate.png", output_dir)
 
     count_summary = summary.sort_values("transaction_count", ascending=False)
     x_positions = np.arange(len(count_summary))
@@ -269,7 +277,7 @@ def plot_category_analysis(dataframe: pd.DataFrame) -> None:
     axis.set_xticklabels(count_summary["category"], rotation=45, ha="right")
     axis.legend()
     style_axis(axis, "Transaction and Fraud Counts by Category", "Category", "Count")
-    save_current_figure("eda_category_transaction_counts.png")
+    save_current_figure("eda_category_transaction_counts.png", output_dir)
 
     table_summary = summary.copy()
     table_summary["transaction_count"] = table_summary["transaction_count"].map("{:,}".format)
@@ -278,10 +286,11 @@ def plot_category_analysis(dataframe: pd.DataFrame) -> None:
         table_summary,
         "Category Fraud Summary",
         "eda_category_fraud_summary_table.png",
+        output_dir,
     )
 
 
-def plot_distance_distribution(dataframe: pd.DataFrame) -> None:
+def plot_distance_distribution(dataframe: pd.DataFrame, output_dir: Path) -> None:
     distance_cap = dataframe["customer_merchant_distance_km"].quantile(0.995)
 
     _, axis = create_figure()
@@ -296,10 +305,10 @@ def plot_distance_distribution(dataframe: pd.DataFrame) -> None:
         "Distance (km)",
         "Transaction Count",
     )
-    save_current_figure("eda_distance_distribution.png")
+    save_current_figure("eda_distance_distribution.png", output_dir)
 
 
-def plot_distance_by_fraud(dataframe: pd.DataFrame) -> None:
+def plot_distance_by_fraud(dataframe: pd.DataFrame, output_dir: Path) -> None:
     plot_data = dataframe[[TARGET_COLUMN, "customer_merchant_distance_km"]].copy()
 
     _, axis = create_figure(8, 5.8)
@@ -318,10 +327,10 @@ def plot_distance_by_fraud(dataframe: pd.DataFrame) -> None:
         "is_fraud",
         "Customer-Merchant Distance (km)",
     )
-    save_current_figure("eda_distance_by_fraud_boxplot.png")
+    save_current_figure("eda_distance_by_fraud_boxplot.png", output_dir)
 
 
-def plot_distance_bucket_fraud_rate(dataframe: pd.DataFrame) -> None:
+def plot_distance_bucket_fraud_rate(dataframe: pd.DataFrame, output_dir: Path) -> None:
     distance_bins = [0, 10, 25, 50, 100, 250, np.inf]
     distance_labels = ["0-10", "10-25", "25-50", "50-100", "100-250", "250+"]
     bucket = pd.cut(
@@ -350,10 +359,10 @@ def plot_distance_bucket_fraud_rate(dataframe: pd.DataFrame) -> None:
             color="#f4f4f5",
             fontsize=8,
         )
-    save_current_figure("eda_distance_bucket_fraud_rate.png")
+    save_current_figure("eda_distance_bucket_fraud_rate.png", output_dir)
 
 
-def plot_amount_vs_distance_sample(dataframe: pd.DataFrame) -> None:
+def plot_amount_vs_distance_sample(dataframe: pd.DataFrame, output_dir: Path) -> None:
     fraud_rows = dataframe[dataframe[TARGET_COLUMN]]
     non_fraud_rows = dataframe[~dataframe[TARGET_COLUMN]].sample(
         n=min(SCATTER_SAMPLE_SIZE, (~dataframe[TARGET_COLUMN]).sum()),
@@ -378,10 +387,10 @@ def plot_amount_vs_distance_sample(dataframe: pd.DataFrame) -> None:
         "Customer-Merchant Distance (km)",
         "log1p(amount)",
     )
-    save_current_figure("eda_amt_vs_distance_sample.png")
+    save_current_figure("eda_amt_vs_distance_sample.png", output_dir)
 
 
-def plot_hourly_fraud_rate(dataframe: pd.DataFrame) -> None:
+def plot_hourly_fraud_rate(dataframe: pd.DataFrame, output_dir: Path) -> None:
     fraud_rate = dataframe.groupby("transaction_hour")[TARGET_COLUMN].mean() * 100
 
     _, axis = create_figure(11, 5.8)
@@ -397,10 +406,10 @@ def plot_hourly_fraud_rate(dataframe: pd.DataFrame) -> None:
             color="#f4f4f5",
             fontsize=7,
         )
-    save_current_figure("eda_hourly_fraud_rate.png")
+    save_current_figure("eda_hourly_fraud_rate.png", output_dir)
 
 
-def plot_is_night_fraud_rate(dataframe: pd.DataFrame) -> None:
+def plot_is_night_fraud_rate(dataframe: pd.DataFrame, output_dir: Path) -> None:
     fraud_rate = dataframe.groupby("is_night")[TARGET_COLUMN].mean() * 100
 
     _, axis = create_figure(7.5, 5)
@@ -416,10 +425,10 @@ def plot_is_night_fraud_rate(dataframe: pd.DataFrame) -> None:
             color="#f4f4f5",
             fontsize=9,
         )
-    save_current_figure("eda_is_night_fraud_rate.png")
+    save_current_figure("eda_is_night_fraud_rate.png", output_dir)
 
 
-def plot_correlation_heatmap(dataframe: pd.DataFrame) -> None:
+def plot_correlation_heatmap(dataframe: pd.DataFrame, output_dir: Path) -> None:
     correlation_columns = [
         "amt",
         "customer_merchant_distance_km",
@@ -463,34 +472,35 @@ def plot_correlation_heatmap(dataframe: pd.DataFrame) -> None:
     colorbar.ax.yaxis.set_tick_params(color="#f4f4f5")
     plt.setp(colorbar.ax.get_yticklabels(), color="#f4f4f5")
     figure.tight_layout()
-    save_current_figure("eda_correlation_heatmap.png")
+    save_current_figure("eda_correlation_heatmap.png", output_dir)
 
 
 def main() -> None:
-    dataframe = load_dataset()
+    args = parse_args()
+    dataframe = load_dataset(args.input)
 
     console.print(
         Panel.fit(
-            f"[bold]Input:[/bold] {DATASET_PATH}\n"
+            f"[bold]Input:[/bold] {args.input}\n"
             f"[bold]Rows:[/bold] {len(dataframe):,}\n"
-            f"[bold]Output:[/bold] {OUTPUT_DIR}",
+            f"[bold]Output:[/bold] {args.output_dir}",
             title="Exploratory Data Analysis",
             border_style="cyan",
         )
     )
 
-    plot_target_distribution(dataframe)
-    plot_amount_distribution(dataframe)
-    plot_amount_by_fraud(dataframe)
-    export_amount_summary(dataframe)
-    plot_category_analysis(dataframe)
-    plot_distance_distribution(dataframe)
-    plot_distance_by_fraud(dataframe)
-    plot_distance_bucket_fraud_rate(dataframe)
-    plot_amount_vs_distance_sample(dataframe)
-    plot_hourly_fraud_rate(dataframe)
-    plot_is_night_fraud_rate(dataframe)
-    plot_correlation_heatmap(dataframe)
+    plot_target_distribution(dataframe, args.output_dir)
+    plot_amount_distribution(dataframe, args.output_dir)
+    plot_amount_by_fraud(dataframe, args.output_dir)
+    export_amount_summary(dataframe, args.output_dir)
+    plot_category_analysis(dataframe, args.output_dir)
+    plot_distance_distribution(dataframe, args.output_dir)
+    plot_distance_by_fraud(dataframe, args.output_dir)
+    plot_distance_bucket_fraud_rate(dataframe, args.output_dir)
+    plot_amount_vs_distance_sample(dataframe, args.output_dir)
+    plot_hourly_fraud_rate(dataframe, args.output_dir)
+    plot_is_night_fraud_rate(dataframe, args.output_dir)
+    plot_correlation_heatmap(dataframe, args.output_dir)
 
 
 if __name__ == "__main__":
