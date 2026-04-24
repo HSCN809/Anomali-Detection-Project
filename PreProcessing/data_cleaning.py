@@ -1,6 +1,8 @@
+import argparse
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 import pandas as pd
 from rich.console import Console
 from rich.panel import Panel
@@ -15,17 +17,81 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_merged.csv"
 OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
 MISSING_VALUES_IMAGE_PATH = OUTPUT_DIR / "missing_value_analysis.png"
+NUMERIC_IMPUTE_COLUMNS = [
+    "amt",
+    "lat",
+    "long",
+    "city_pop",
+    "unix_time",
+    "merch_lat",
+    "merch_long",
+]
+CATEGORICAL_IMPUTE_COLUMNS = [
+    "merchant",
+    "category",
+    "first",
+    "last",
+    "gender",
+    "street",
+    "city",
+    "state",
+    "zip",
+    "job",
+    "dob",
+    "trans_date_trans_time",
+    "cc_num",
+    "trans_num",
+    "source_dataset",
+]
 console = Console()
 
 
-def load_dataset(nrows: int | None = None) -> pd.DataFrame:
-    if not DATASET_PATH.exists():
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Analyze and optionally clean missing values.")
+    parser.add_argument("--input", type=Path, default=DATASET_PATH)
+    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--nrows", type=int, default=None)
+    return parser.parse_args()
+
+
+def load_dataset(path: Path, nrows: int | None = None) -> pd.DataFrame:
+    if not path.exists():
         raise FileNotFoundError(
-            f"Merged dataset not found: {DATASET_PATH}\n"
+            f"Merged dataset not found: {path}\n"
             "Create it first with: python DataSet/merge_fraud_datasets.py"
         )
 
-    return pd.read_csv(DATASET_PATH, low_memory=False, nrows=nrows)
+    return pd.read_csv(path, low_memory=False, nrows=nrows)
+
+
+def clean_missing_values(dataframe: pd.DataFrame) -> pd.DataFrame:
+    cleaned = dataframe.copy()
+
+    for column in NUMERIC_IMPUTE_COLUMNS:
+        if column in cleaned.columns:
+            values = pd.to_numeric(cleaned[column], errors="coerce")
+            median = values.median()
+            cleaned[column] = values.fillna(0 if pd.isna(median) else median)
+
+    for column in CATEGORICAL_IMPUTE_COLUMNS:
+        if column not in cleaned.columns:
+            continue
+
+        values = cleaned[column].replace("", np.nan)
+        mode = values.dropna().mode()
+        fill_value = mode.iloc[0] if not mode.empty else "Unknown"
+        if column in {"merchant", "job", "zip"}:
+            fill_value = "Unknown"
+        cleaned[column] = values.fillna(fill_value)
+
+    return cleaned
+
+
+def save_cleaned_dataset(dataframe: pd.DataFrame, output_path: Path) -> None:
+    temp_output_path = output_path.with_suffix(".tmp.csv")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    dataframe.to_csv(temp_output_path, index=False)
+    temp_output_path.replace(output_path)
 
 
 def build_missing_values_summary(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -115,13 +181,14 @@ def export_missing_values_png(summary: pd.DataFrame) -> None:
 
 
 def main() -> None:
-    dataframe = load_dataset()
+    args = parse_args()
+    dataframe = load_dataset(args.input, args.nrows)
     missing_values_summary = build_missing_values_summary(dataframe)
 
     console.print(
         Panel.fit(
             f"[bold]Loaded dataset[/bold]\n"
-            f"Path: [cyan]{DATASET_PATH}[/cyan]\n"
+            f"Path: [cyan]{args.input}[/cyan]\n"
             f"Rows: [green]{len(dataframe):,}[/green]\n"
             f"Columns: [green]{len(dataframe.columns):,}[/green]",
             title="Data Cleaning",
@@ -131,6 +198,15 @@ def main() -> None:
 
     print_missing_values_table(missing_values_summary)
     export_missing_values_png(missing_values_summary)
+
+    if args.output is not None:
+        cleaned_dataframe = clean_missing_values(dataframe)
+        save_cleaned_dataset(cleaned_dataframe, args.output)
+        cleaned_missing_count = int(cleaned_dataframe.isnull().sum().sum())
+        console.print(
+            f"[green]Cleaned dataset exported:[/green] {args.output} "
+            f"| remaining missing values: {cleaned_missing_count:,}"
+        )
 
 
 if __name__ == "__main__":

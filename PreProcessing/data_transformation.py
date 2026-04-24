@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 import matplotlib
@@ -28,14 +29,21 @@ EARTH_RADIUS_KM = 6371.0
 console = Console()
 
 
-def load_dataset() -> pd.DataFrame:
-    if not DATASET_PATH.exists():
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Transform raw fraud transaction data.")
+    parser.add_argument("--input", type=Path, default=DATASET_PATH)
+    parser.add_argument("--output", type=Path, default=TRANSFORMED_DATASET_PATH)
+    return parser.parse_args()
+
+
+def load_dataset(path: Path) -> pd.DataFrame:
+    if not path.exists():
         raise FileNotFoundError(
-            f"Merged dataset not found: {DATASET_PATH}\n"
+            f"Merged dataset not found: {path}\n"
             "Create it first with: python DataSet/merge_fraud_datasets.py"
         )
 
-    return pd.read_csv(DATASET_PATH, low_memory=False)
+    return pd.read_csv(path, low_memory=False)
 
 
 def add_time_features(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -57,9 +65,8 @@ def add_age_feature(dataframe: pd.DataFrame) -> pd.DataFrame:
     transaction_time = pd.to_datetime(transformed[TIME_COLUMN], unit="s", errors="coerce")
     birth_date = pd.to_datetime(transformed[DOB_COLUMN], errors="coerce")
 
-    transformed["customer_age"] = (
-        (transaction_time - birth_date).dt.days / 365.25
-    ).round().astype("int64")
+    age = ((transaction_time - birth_date).dt.days / 365.25).round()
+    transformed["customer_age"] = age.fillna(age.median()).astype("int64")
 
     return transformed
 
@@ -120,12 +127,13 @@ def transform_dataset(dataframe: pd.DataFrame) -> pd.DataFrame:
     return transformed
 
 
-def save_transformed_dataset(dataframe: pd.DataFrame) -> None:
-    temp_output_path = TRANSFORMED_DATASET_PATH.with_suffix(".tmp.csv")
+def save_transformed_dataset(dataframe: pd.DataFrame, output_path: Path) -> None:
+    temp_output_path = output_path.with_suffix(".tmp.csv")
 
     try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         dataframe.to_csv(temp_output_path, index=False)
-        temp_output_path.replace(TRANSFORMED_DATASET_PATH)
+        temp_output_path.replace(output_path)
     except PermissionError as exc:
         try:
             temp_output_path.unlink(missing_ok=True)
@@ -134,7 +142,7 @@ def save_transformed_dataset(dataframe: pd.DataFrame) -> None:
 
         raise SystemExit(
             "Could not write transformed dataset. Close any application that may "
-            f"be using this file, then run the script again: {TRANSFORMED_DATASET_PATH}"
+            f"be using this file, then run the script again: {output_path}"
         ) from exc
 
 
@@ -266,7 +274,7 @@ def build_distance_bucket_fraud_rate(dataframe: pd.DataFrame) -> pd.Series:
     return dataframe.groupby(distance_bucket, observed=True)[TARGET_COLUMN].mean()
 
 
-def export_transformation_analysis(dataframe: pd.DataFrame) -> None:
+def export_transformation_analysis(dataframe: pd.DataFrame, output_path: Path) -> None:
     summary = pd.DataFrame(
         {
             "metric": [
@@ -285,7 +293,7 @@ def export_transformation_analysis(dataframe: pd.DataFrame) -> None:
                 "1 column",
                 "1 column",
                 f"{len([column for column in dataframe.columns if column.startswith(('category_', 'gender_'))])} one-hot columns",
-                "DataSet/fraud_transformed.csv",
+                str(output_path),
             ],
         }
     )
@@ -318,6 +326,7 @@ def export_transformation_analysis(dataframe: pd.DataFrame) -> None:
     )
 
     day_fraud_rate = dataframe.groupby("transaction_day_of_week")[TARGET_COLUMN].mean()
+    day_fraud_rate = day_fraud_rate.reindex(range(7), fill_value=0)
     day_fraud_rate.index = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     save_bar_chart(
         day_fraud_rate,
@@ -339,21 +348,22 @@ def export_transformation_analysis(dataframe: pd.DataFrame) -> None:
 
 
 def main() -> None:
-    dataframe = load_dataset()
+    args = parse_args()
+    dataframe = load_dataset(args.input)
     transformed_dataframe = transform_dataset(dataframe)
-    save_transformed_dataset(transformed_dataframe)
+    save_transformed_dataset(transformed_dataframe, args.output)
 
     console.print(
         Panel.fit(
-            f"[bold]Input:[/bold] {DATASET_PATH}\n"
-            f"[bold]Output:[/bold] {TRANSFORMED_DATASET_PATH}\n"
+            f"[bold]Input:[/bold] {args.input}\n"
+            f"[bold]Output:[/bold] {args.output}\n"
             f"[bold]Rows:[/bold] {len(transformed_dataframe):,}\n"
             f"[bold]Columns:[/bold] {len(transformed_dataframe.columns):,}",
             title="Data Transformation",
             border_style="cyan",
         )
     )
-    export_transformation_analysis(transformed_dataframe)
+    export_transformation_analysis(transformed_dataframe, args.output)
 
 
 if __name__ == "__main__":

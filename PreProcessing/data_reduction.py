@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 import matplotlib
@@ -44,14 +45,21 @@ READ_DTYPES = {
 console = Console()
 
 
-def load_dataset() -> pd.DataFrame:
-    if not INPUT_DATASET_PATH.exists():
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Drop high-cardinality/raw columns.")
+    parser.add_argument("--input", type=Path, default=INPUT_DATASET_PATH)
+    parser.add_argument("--output", type=Path, default=OUTPUT_DATASET_PATH)
+    return parser.parse_args()
+
+
+def load_dataset(path: Path) -> pd.DataFrame:
+    if not path.exists():
         raise FileNotFoundError(
-            f"Transformed dataset not found: {INPUT_DATASET_PATH}\n"
+            f"Transformed dataset not found: {path}\n"
             "Create it first with: python PreProcessing/data_transformation.py"
         )
 
-    return pd.read_csv(INPUT_DATASET_PATH, dtype=READ_DTYPES, low_memory=False)
+    return pd.read_csv(path, dtype=READ_DTYPES, low_memory=False)
 
 
 def reduce_dataset(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -61,12 +69,13 @@ def reduce_dataset(dataframe: pd.DataFrame) -> pd.DataFrame:
     return dataframe.drop(columns=existing_columns_to_drop)
 
 
-def save_reduced_dataset(dataframe: pd.DataFrame) -> None:
-    temp_output_path = OUTPUT_DATASET_PATH.with_suffix(".tmp.csv")
+def save_reduced_dataset(dataframe: pd.DataFrame, output_path: Path) -> None:
+    temp_output_path = output_path.with_suffix(".tmp.csv")
 
     try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         dataframe.to_csv(temp_output_path, index=False)
-        temp_output_path.replace(OUTPUT_DATASET_PATH)
+        temp_output_path.replace(output_path)
     except PermissionError as exc:
         try:
             temp_output_path.unlink(missing_ok=True)
@@ -75,13 +84,14 @@ def save_reduced_dataset(dataframe: pd.DataFrame) -> None:
 
         raise SystemExit(
             "Could not write reduced dataset. Close any application that may "
-            f"be using this file, then run the script again: {OUTPUT_DATASET_PATH}"
+            f"be using this file, then run the script again: {output_path}"
         ) from exc
 
 
 def build_reduction_summary(
     original_dataframe: pd.DataFrame,
     reduced_dataframe: pd.DataFrame,
+    output_path: Path,
 ) -> pd.DataFrame:
     dropped_columns = [
         column for column in COLUMNS_TO_DROP if column in original_dataframe.columns
@@ -108,7 +118,7 @@ def build_reduction_summary(
                 f"{len(reduced_dataframe.columns):,}",
                 f"{len(dropped_columns):,}",
                 f"{len(missing_drop_columns):,}",
-                "DataSet/fraud_transformed_reducted.csv",
+                str(output_path),
             ],
         }
     )
@@ -187,8 +197,9 @@ def save_table_png(dataframe: pd.DataFrame, title: str, filename: str) -> None:
 def export_reduction_analysis(
     original_dataframe: pd.DataFrame,
     reduced_dataframe: pd.DataFrame,
+    output_path: Path,
 ) -> None:
-    summary = build_reduction_summary(original_dataframe, reduced_dataframe)
+    summary = build_reduction_summary(original_dataframe, reduced_dataframe, output_path)
     column_report = build_column_report(original_dataframe, reduced_dataframe)
 
     print_table(summary, "Data Reduction Summary")
@@ -203,21 +214,22 @@ def export_reduction_analysis(
 
 
 def main() -> None:
-    original_dataframe = load_dataset()
+    args = parse_args()
+    original_dataframe = load_dataset(args.input)
     reduced_dataframe = reduce_dataset(original_dataframe)
-    save_reduced_dataset(reduced_dataframe)
+    save_reduced_dataset(reduced_dataframe, args.output)
 
     console.print(
         Panel.fit(
-            f"[bold]Input:[/bold] {INPUT_DATASET_PATH}\n"
-            f"[bold]Output:[/bold] {OUTPUT_DATASET_PATH}\n"
+            f"[bold]Input:[/bold] {args.input}\n"
+            f"[bold]Output:[/bold] {args.output}\n"
             f"[bold]Rows:[/bold] {len(reduced_dataframe):,}\n"
             f"[bold]Columns:[/bold] {len(reduced_dataframe.columns):,}",
             title="Data Reduction",
             border_style="cyan",
         )
     )
-    export_reduction_analysis(original_dataframe, reduced_dataframe)
+    export_reduction_analysis(original_dataframe, reduced_dataframe, args.output)
 
 
 if __name__ == "__main__":

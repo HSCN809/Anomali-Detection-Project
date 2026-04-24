@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 import matplotlib
@@ -46,14 +47,30 @@ READ_DTYPES = {
 console = Console()
 
 
-def load_dataset() -> pd.DataFrame:
-    if not INPUT_DATASET_PATH.exists():
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Split and scale reduced fraud data.")
+    parser.add_argument("--input", type=Path, default=INPUT_DATASET_PATH)
+    parser.add_argument("--sample-output", type=Path, default=SAMPLED_OUTPUT_PATH)
+    parser.add_argument("--train-output", type=Path, default=TRAIN_OUTPUT_PATH)
+    parser.add_argument("--test-output", type=Path, default=TEST_OUTPUT_PATH)
+    parser.add_argument("--sample-size", type=int, default=SAMPLE_SIZE)
+    parser.add_argument("--fraud-sample-rate", type=float, default=FRAUD_SAMPLE_RATE)
+    parser.add_argument(
+        "--no-sample",
+        action="store_true",
+        help="Use the full input dataset before split/scaling.",
+    )
+    return parser.parse_args()
+
+
+def load_dataset(path: Path) -> pd.DataFrame:
+    if not path.exists():
         raise FileNotFoundError(
-            f"Reduced dataset not found: {INPUT_DATASET_PATH}\n"
+            f"Reduced dataset not found: {path}\n"
             "Create it first with: python PreProcessing/data_reduction.py"
         )
 
-    return pd.read_csv(INPUT_DATASET_PATH, dtype=READ_DTYPES, low_memory=False)
+    return pd.read_csv(path, dtype=READ_DTYPES, low_memory=False)
 
 
 def parse_bool_series(series: pd.Series) -> pd.Series:
@@ -64,10 +81,14 @@ def parse_bool_series(series: pd.Series) -> pd.Series:
     return normalized.isin(["true", "1", "yes"])
 
 
-def sample_imbalanced_dataset(dataframe: pd.DataFrame) -> pd.DataFrame:
+def sample_imbalanced_dataset(
+    dataframe: pd.DataFrame,
+    sample_size: int,
+    fraud_sample_rate: float,
+) -> pd.DataFrame:
     target = parse_bool_series(dataframe[TARGET_COLUMN])
-    fraud_count = int(round(SAMPLE_SIZE * FRAUD_SAMPLE_RATE))
-    non_fraud_count = SAMPLE_SIZE - fraud_count
+    fraud_count = int(round(sample_size * fraud_sample_rate))
+    non_fraud_count = sample_size - fraud_count
 
     fraud_rows = dataframe[target]
     non_fraud_rows = dataframe[~target]
@@ -246,6 +267,9 @@ def build_scaling_summary(
     encoded_dataframe: pd.DataFrame,
     train_dataframe: pd.DataFrame,
     test_dataframe: pd.DataFrame,
+    sample_output_path: Path,
+    train_output_path: Path,
+    test_output_path: Path,
 ) -> pd.DataFrame:
     sampled_target = parse_bool_series(sampled_dataframe[TARGET_COLUMN])
 
@@ -275,11 +299,11 @@ def build_scaling_summary(
                 f"{len(source_dataframe.columns):,}",
                 f"{len(encoded_dataframe.columns):,}",
                 "6 cyclic columns",
-                "DataSet/fraud_transformed_reducted_sampled_50k.csv",
+                str(sample_output_path),
                 f"{len(train_dataframe):,}",
                 f"{len(test_dataframe):,}",
-                "DataSet/fraud_transformed_reducted_scaled_train.csv",
-                "DataSet/fraud_transformed_reducted_scaled_test.csv",
+                str(train_output_path),
+                str(test_output_path),
             ],
         }
     )
@@ -356,6 +380,9 @@ def export_scaling_analysis(
     encoded_dataframe: pd.DataFrame,
     train_dataframe: pd.DataFrame,
     test_dataframe: pd.DataFrame,
+    sample_output_path: Path,
+    train_output_path: Path,
+    test_output_path: Path,
 ) -> None:
     summary = build_scaling_summary(
         source_dataframe,
@@ -363,6 +390,9 @@ def export_scaling_analysis(
         encoded_dataframe,
         train_dataframe,
         test_dataframe,
+        sample_output_path,
+        train_output_path,
+        test_output_path,
     )
     operation_report = build_operation_report()
     class_distribution = build_class_distribution(train_dataframe, test_dataframe)
@@ -387,23 +417,38 @@ def export_scaling_analysis(
 
 
 def main() -> None:
-    dataframe = load_dataset()
-    sampled_dataframe = sample_imbalanced_dataset(dataframe)
+    args = parse_args()
+    dataframe = load_dataset(args.input)
+    sampled_dataframe = (
+        dataframe.reset_index(drop=True)
+        if args.no_sample
+        else sample_imbalanced_dataset(
+            dataframe,
+            args.sample_size,
+            args.fraud_sample_rate,
+        )
+    )
     encoded_dataframe = add_cyclic_features(sampled_dataframe)
     train_dataframe, test_dataframe = split_dataset(encoded_dataframe)
     scaled_train, scaled_test = apply_scaling(train_dataframe, test_dataframe)
 
-    save_dataset(sampled_dataframe, SAMPLED_OUTPUT_PATH)
-    save_dataset(scaled_train, TRAIN_OUTPUT_PATH)
-    save_dataset(scaled_test, TEST_OUTPUT_PATH)
+    save_dataset(sampled_dataframe, args.sample_output)
+    save_dataset(scaled_train, args.train_output)
+    save_dataset(scaled_test, args.test_output)
+
+    sample_label = (
+        f"{len(sampled_dataframe):,} full input rows"
+        if args.no_sample
+        else f"{args.sample_size:,} rows, {args.fraud_sample_rate:.0%} fraud"
+    )
 
     console.print(
         Panel.fit(
-            f"[bold]Input:[/bold] {INPUT_DATASET_PATH}\n"
-            f"[bold]Sample output:[/bold] {SAMPLED_OUTPUT_PATH}\n"
-            f"[bold]Train output:[/bold] {TRAIN_OUTPUT_PATH}\n"
-            f"[bold]Test output:[/bold] {TEST_OUTPUT_PATH}\n"
-            f"[bold]Sample:[/bold] {SAMPLE_SIZE:,} rows, {FRAUD_SAMPLE_RATE:.0%} fraud\n"
+            f"[bold]Input:[/bold] {args.input}\n"
+            f"[bold]Sample output:[/bold] {args.sample_output}\n"
+            f"[bold]Train output:[/bold] {args.train_output}\n"
+            f"[bold]Test output:[/bold] {args.test_output}\n"
+            f"[bold]Sample:[/bold] {sample_label}\n"
             f"[bold]Split:[/bold] 80/20 stratified",
             title="Data Scaling",
             border_style="cyan",
@@ -415,6 +460,9 @@ def main() -> None:
         encoded_dataframe,
         scaled_train,
         scaled_test,
+        args.sample_output,
+        args.train_output,
+        args.test_output,
     )
 
 
