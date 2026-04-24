@@ -15,8 +15,8 @@ import matplotlib.pyplot as plt
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_transformed.csv"
-OUTPUT_DIR = ROOT_DIR / "EDA" / "eda_outputs"
+DATASET_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_transformed.csv"
+OUTPUT_DIR = ROOT_DIR / "EDA" / "synthetic_eda_outputs"
 
 TARGET_COLUMN = "is_fraud"
 CATEGORY_PREFIX = "category_"

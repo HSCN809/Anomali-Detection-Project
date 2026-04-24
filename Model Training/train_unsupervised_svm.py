@@ -26,10 +26,10 @@ from sklearn.svm import OneClassSVM, SVC
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INPUT_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_scaled_train.csv"
-DEFAULT_LINEAR_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_sgd_svm_model.pkl"
-DEFAULT_KERNEL_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_rbf_svm_model.pkl"
-DEFAULT_ONECLASS_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "oneclass_rbf_svm_model.pkl"
+DEFAULT_INPUT_PATH = PROJECT_ROOT / "DataSet" / "synthetic_fraud_transformed_reducted_scaled_train.csv"
+DEFAULT_LINEAR_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "synthetic_supervised_sgd_svm_model.pkl"
+DEFAULT_KERNEL_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "synthetic_supervised_rbf_svm_model.pkl"
+DEFAULT_ONECLASS_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "synthetic_oneclass_rbf_svm_model.pkl"
 
 TARGET_COLUMN = "is_fraud"
 FREQUENCY_COLUMNS = ["job", "zip"]
@@ -43,7 +43,7 @@ console = Console()
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train supervised linear and kernel SVM fraud classifiers."
+        description="Train SVM fraud models on the synthetic scaled dataset."
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_PATH)
     parser.add_argument("--model-path", type=Path, default=DEFAULT_LINEAR_MODEL_PATH)
@@ -64,8 +64,8 @@ def parse_args() -> argparse.Namespace:
         "--models",
         nargs="+",
         choices=["linear", "kernel", "oneclass", "both", "all"],
-        default=["all"],
-        help="Which model(s) to train. 'both' means linear+kernel; default trains all three.",
+        default=["oneclass"],
+        help="Which model(s) to train. 'both' means linear+kernel; default trains the synthetic one-class model.",
     )
     parser.add_argument(
         "--param-preset",
@@ -674,10 +674,11 @@ def main() -> None:
     console.print(
         Panel.fit(
             "Training models: supervised linear SVM, supervised RBF SVM, and One-Class RBF SVM\n"
+            "Dataset: synthetic fraud transactions\n"
             "Target: is_fraud\n"
             "Frequency encoding: job, zip\n"
             "Threshold tuning: validation split",
-            title="Supervised SVM Training",
+            title="SVM Training",
             border_style="cyan",
         )
     )

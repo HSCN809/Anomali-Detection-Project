@@ -35,14 +35,14 @@ import matplotlib.pyplot as plt
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_TRAIN_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_scaled_train.csv"
-DEFAULT_TEST_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_scaled_test.csv"
-DEFAULT_REDUCED_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted.csv"
-DEFAULT_SAMPLED_SOURCE_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_sampled_50k.csv"
-DEFAULT_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_sgd_svm_model.pkl"
-DEFAULT_KERNEL_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_rbf_svm_model.pkl"
-DEFAULT_ONECLASS_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "oneclass_rbf_svm_model.pkl"
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "Model Training" / "evaluation_outputs"
+DEFAULT_TRAIN_PATH = PROJECT_ROOT / "DataSet" / "synthetic_fraud_transformed_reducted_scaled_train.csv"
+DEFAULT_TEST_PATH = PROJECT_ROOT / "DataSet" / "synthetic_fraud_transformed_reducted_scaled_test.csv"
+DEFAULT_REDUCED_PATH = PROJECT_ROOT / "DataSet" / "synthetic_fraud_transformed_reducted.csv"
+DEFAULT_SAMPLED_SOURCE_PATH = PROJECT_ROOT / "DataSet" / "synthetic_fraud_transformed_reducted_sampled.csv"
+DEFAULT_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "synthetic_supervised_sgd_svm_model.pkl"
+DEFAULT_KERNEL_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "synthetic_supervised_rbf_svm_model.pkl"
+DEFAULT_ONECLASS_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "synthetic_oneclass_rbf_svm_model.pkl"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "Model Training" / "evaluation_outputs_synthetic"
 
 TEST_SIZE = 0.20
 SOURCE_SAMPLE_SIZE = 50_000
@@ -69,8 +69,8 @@ def parse_args() -> argparse.Namespace:
         "--models",
         nargs="+",
         choices=["linear", "kernel", "oneclass", "both", "all"],
-        default=["all"],
-        help="Which model artifact(s) to evaluate. 'both' means linear+kernel; default evaluates all three.",
+        default=["oneclass"],
+        help="Which model artifact(s) to evaluate. 'both' means linear+kernel; default evaluates the synthetic one-class model.",
     )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--chunksize", type=int, default=300_000)

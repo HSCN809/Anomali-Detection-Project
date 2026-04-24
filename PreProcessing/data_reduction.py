@@ -13,10 +13,9 @@ import matplotlib.pyplot as plt
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-INPUT_DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_transformed.csv"
-OUTPUT_DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted.csv"
-OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
-SYNTHETIC_OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
+INPUT_DATASET_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_transformed.csv"
+OUTPUT_DATASET_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_transformed_reducted.csv"
+OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
 
 COLUMNS_TO_DROP = [
     "Unnamed: 0",
@@ -67,7 +66,7 @@ def load_dataset(path: Path) -> pd.DataFrame:
 def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
     if explicit_output_dir is not None:
         return explicit_output_dir
-    return SYNTHETIC_OUTPUT_DIR if "synthetic" in path.stem.lower() else OUTPUT_DIR
+    return OUTPUT_DIR
 
 
 def reduce_dataset(dataframe: pd.DataFrame) -> pd.DataFrame:

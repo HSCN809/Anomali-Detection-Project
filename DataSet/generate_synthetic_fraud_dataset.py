@@ -334,7 +334,7 @@ def main() -> None:
         Panel.fit(
             "Faker-based synthetic fraud data\n"
             "Pattern: noisy overlapping anomaly for One-Class SVM\n"
-            "Schema: compatible with fraud_merged.csv",
+            "Schema: compatible with synthetic_fraud_merged.csv",
             title="Synthetic Dataset Generator",
             border_style="cyan",
         )

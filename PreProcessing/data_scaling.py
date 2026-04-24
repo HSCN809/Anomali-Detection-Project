@@ -16,12 +16,11 @@ import matplotlib.pyplot as plt
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-INPUT_DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted.csv"
-SAMPLED_OUTPUT_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted_sampled_50k.csv"
-TRAIN_OUTPUT_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted_scaled_train.csv"
-TEST_OUTPUT_PATH = ROOT_DIR / "DataSet" / "fraud_transformed_reducted_scaled_test.csv"
-OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
-SYNTHETIC_OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
+INPUT_DATASET_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_transformed_reducted.csv"
+SAMPLED_OUTPUT_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_transformed_reducted_sampled.csv"
+TRAIN_OUTPUT_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_transformed_reducted_scaled_train.csv"
+TEST_OUTPUT_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_transformed_reducted_scaled_test.csv"
+OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
 
 TARGET_COLUMN = "is_fraud"
 SAMPLE_SIZE = 50_000
@@ -78,7 +77,7 @@ def load_dataset(path: Path) -> pd.DataFrame:
 def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
     if explicit_output_dir is not None:
         return explicit_output_dir
-    return SYNTHETIC_OUTPUT_DIR if "synthetic" in path.stem.lower() else OUTPUT_DIR
+    return OUTPUT_DIR
 
 
 def parse_bool_series(series: pd.Series) -> pd.Series:

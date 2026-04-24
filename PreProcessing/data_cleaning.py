@@ -14,9 +14,9 @@ import matplotlib.pyplot as plt
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_merged.csv"
-OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
-SYNTHETIC_OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
+DATASET_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_merged.csv"
+CLEANED_DATASET_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_cleaned.csv"
+OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
 NUMERIC_IMPUTE_COLUMNS = [
     "amt",
     "lat",
@@ -49,7 +49,7 @@ console = Console()
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze and optionally clean missing values.")
     parser.add_argument("--input", type=Path, default=DATASET_PATH)
-    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--output", type=Path, default=CLEANED_DATASET_PATH)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--nrows", type=int, default=None)
     return parser.parse_args()
@@ -58,8 +58,8 @@ def parse_args() -> argparse.Namespace:
 def load_dataset(path: Path, nrows: int | None = None) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(
-            f"Merged dataset not found: {path}\n"
-            "Create it first with: python DataSet/merge_fraud_datasets.py"
+            f"Synthetic merged dataset not found: {path}\n"
+            "Create it first with: python DataSet/generate_synthetic_fraud_dataset.py"
         )
 
     return pd.read_csv(path, low_memory=False, nrows=nrows)
@@ -98,7 +98,7 @@ def save_cleaned_dataset(dataframe: pd.DataFrame, output_path: Path) -> None:
 def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
     if explicit_output_dir is not None:
         return explicit_output_dir
-    return SYNTHETIC_OUTPUT_DIR if "synthetic" in path.stem.lower() else OUTPUT_DIR
+    return OUTPUT_DIR
 
 
 def build_missing_values_summary(dataframe: pd.DataFrame) -> pd.DataFrame:

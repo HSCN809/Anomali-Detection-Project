@@ -1,6 +1,10 @@
 import pandas as pd
+from pathlib import Path
 
-df = pd.read_csv("fraud_transformed_reducted_scaled_train.csv", dtype={"cc_num": "str", "zip": "str"})
+ROOT_DIR = Path(__file__).resolve().parents[1]
+DATASET_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_transformed_reducted_scaled_train.csv"
+
+df = pd.read_csv(DATASET_PATH, dtype={"cc_num": "str", "zip": "str"})
 
 print(df.head(10))
 print(df.info())

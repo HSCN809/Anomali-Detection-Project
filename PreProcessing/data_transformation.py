@@ -14,10 +14,9 @@ import matplotlib.pyplot as plt
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_merged.csv"
-TRANSFORMED_DATASET_PATH = ROOT_DIR / "DataSet" / "fraud_transformed.csv"
-OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
-SYNTHETIC_OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
+DATASET_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_cleaned.csv"
+TRANSFORMED_DATASET_PATH = ROOT_DIR / "DataSet" / "synthetic_fraud_transformed.csv"
+OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
 
 TIME_COLUMN = "unix_time"
 DOB_COLUMN = "dob"
@@ -41,8 +40,8 @@ def parse_args() -> argparse.Namespace:
 def load_dataset(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(
-            f"Merged dataset not found: {path}\n"
-            "Create it first with: python DataSet/merge_fraud_datasets.py"
+            f"Synthetic cleaned dataset not found: {path}\n"
+            "Create it first with: python PreProcessing/data_cleaning.py"
         )
 
     return pd.read_csv(path, low_memory=False)
@@ -51,7 +50,7 @@ def load_dataset(path: Path) -> pd.DataFrame:
 def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
     if explicit_output_dir is not None:
         return explicit_output_dir
-    return SYNTHETIC_OUTPUT_DIR if "synthetic" in path.stem.lower() else OUTPUT_DIR
+    return OUTPUT_DIR
 
 
 def add_time_features(dataframe: pd.DataFrame) -> pd.DataFrame:

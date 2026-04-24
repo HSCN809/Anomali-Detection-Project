@@ -26,8 +26,8 @@ import matplotlib.pyplot as plt
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATASET_DIR = ROOT_DIR / "DataSet"
-OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "prep_outputs"
-DATASET_FILES = ("fraud_merged.csv",)
+OUTPUT_DIR = ROOT_DIR / "PreProcessing" / "synthetic_prep_outputs"
+DATASET_FILES = ("synthetic_fraud_merged.csv",)
 TARGET_COLUMN = "is_fraud"
 console = Console() if Console is not None else None
 exported_image_paths: set[Path] = set()
