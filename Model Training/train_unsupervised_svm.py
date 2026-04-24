@@ -22,13 +22,14 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import train_test_split
-from sklearn.svm import SVC
+from sklearn.svm import OneClassSVM, SVC
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_scaled_train.csv"
 DEFAULT_LINEAR_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_sgd_svm_model.pkl"
 DEFAULT_KERNEL_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_rbf_svm_model.pkl"
+DEFAULT_ONECLASS_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "oneclass_rbf_svm_model.pkl"
 
 TARGET_COLUMN = "is_fraud"
 FREQUENCY_COLUMNS = ["job", "zip"]
@@ -47,17 +48,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_PATH)
     parser.add_argument("--model-path", type=Path, default=DEFAULT_LINEAR_MODEL_PATH)
     parser.add_argument("--kernel-model-path", type=Path, default=DEFAULT_KERNEL_MODEL_PATH)
+    parser.add_argument("--oneclass-model-path", type=Path, default=DEFAULT_ONECLASS_MODEL_PATH)
     parser.add_argument("--training-sample-size", type=int, default=None)
     parser.add_argument("--kernel-training-sample-size", type=int, default=None)
+    parser.add_argument(
+        "--oneclass-training-sample-size",
+        type=int,
+        default=None,
+        help="Optional rows used for One-Class SVM tuning/final fit. Default uses all train rows.",
+    )
     parser.add_argument("--validation-size", type=float, default=0.2)
     parser.add_argument("--chunksize", type=int, default=200_000)
     parser.add_argument("--random-state", type=int, default=RANDOM_STATE)
     parser.add_argument(
         "--models",
         nargs="+",
-        choices=["linear", "kernel", "both"],
-        default=["both"],
-        help="Which model(s) to train. Default trains both linear and RBF kernel SVM.",
+        choices=["linear", "kernel", "oneclass", "both", "all"],
+        default=["all"],
+        help="Which model(s) to train. 'both' means linear+kernel; default trains all three.",
     )
     parser.add_argument(
         "--param-preset",
@@ -167,7 +175,11 @@ def prepare_features(
 
 
 def selected_model_names(raw_models: list[str]) -> set[str]:
-    return {"linear", "kernel"} if "both" in raw_models else set(raw_models)
+    if "all" in raw_models:
+        return {"linear", "kernel", "oneclass"}
+    if "both" in raw_models:
+        return {"linear", "kernel"}
+    return set(raw_models)
 
 
 def get_linear_param_grid(preset: str) -> list[dict[str, float | str]]:
@@ -249,6 +261,38 @@ def build_kernel_model(params: dict[str, float | str], random_state: int) -> SVC
         class_weight={0: 1.0, 1: float(params["fraud_weight"])},
         cache_size=1000,
         random_state=random_state,
+    )
+
+
+def get_oneclass_param_grid(preset: str) -> list[dict[str, float | str]]:
+    if preset == "fast":
+        return [
+            {
+                "kernel": "rbf",
+                "nu": 0.05,
+                "gamma": "scale",
+            }
+        ]
+
+    return [
+        {
+            "kernel": "rbf",
+            "nu": nu,
+            "gamma": gamma,
+        }
+        for nu, gamma in product(
+            [0.03, 0.05, 0.08],
+            ["scale", 0.05],
+        )
+    ]
+
+
+def build_oneclass_model(params: dict[str, float | str], random_state: int) -> OneClassSVM:
+    return OneClassSVM(
+        kernel=str(params["kernel"]),
+        nu=float(params["nu"]),
+        gamma=params["gamma"],
+        cache_size=1000,
     )
 
 
@@ -400,6 +444,56 @@ def tune_hyperparameters(
     return best_params, best_threshold, results
 
 
+def tune_oneclass_hyperparameters(
+    features: pd.DataFrame,
+    target: pd.Series,
+    param_grid: list[dict[str, float | str]],
+    validation_size: float,
+    random_state: int,
+) -> tuple[dict[str, float | str], float, list[dict[str, float | str]]]:
+    x_train, x_valid, y_train, y_valid = train_test_split(
+        features,
+        target,
+        test_size=validation_size,
+        random_state=random_state,
+        stratify=target,
+    )
+    normal_x_train = x_train.loc[~y_train.astype(bool)]
+    results = []
+    best_params = param_grid[0]
+    best_threshold = 0.0
+    best_selection_score = -math.inf
+
+    for index, params in enumerate(param_grid, start=1):
+        console.log(f"Testing One-Class RBF params {index}/{len(param_grid)}: {params}")
+        model = build_oneclass_model(params, random_state)
+        model.fit(normal_x_train)
+
+        scores = -model.decision_function(x_valid)
+        threshold_report = build_threshold_report(y_valid, scores)
+        selected = select_threshold(threshold_report)
+        result = {
+            **params,
+            "fit_rows": len(normal_x_train),
+            **selected.to_dict(),
+        }
+        results.append(result)
+
+        target_hit = result["recall"] >= RECALL_TARGET
+        selection_score = (
+            10 - float(result["false_positive_rate"]) + float(result["precision"])
+            if target_hit
+            else float(result["recall"])
+        )
+
+        if selection_score > best_selection_score:
+            best_selection_score = selection_score
+            best_params = params
+            best_threshold = float(result["threshold"])
+
+    return best_params, best_threshold, results
+
+
 def fit_final_model(
     features: pd.DataFrame,
     target: pd.Series,
@@ -418,6 +512,18 @@ def fit_final_model(
     return model
 
 
+def fit_final_oneclass_model(
+    features: pd.DataFrame,
+    target: pd.Series,
+    params: dict[str, float | str],
+    random_state: int,
+) -> OneClassSVM:
+    normal_features = features.loc[~target.astype(bool)]
+    model = build_oneclass_model(params, random_state)
+    model.fit(normal_features)
+    return model
+
+
 def print_tuning_results(results: list[dict[str, float | str]], title: str) -> None:
     table = Table(title=title, show_lines=True)
     columns = [
@@ -426,6 +532,7 @@ def print_tuning_results(results: list[dict[str, float | str]], title: str) -> N
             "loss",
             "kernel",
             "C",
+            "nu",
             "gamma",
             "alpha",
             "fraud_weight",
@@ -511,6 +618,53 @@ def train_and_save_model(
     console.print(f"[bold green]{model_label} model artifact saved:[/bold green] {model_path}")
 
 
+def train_and_save_oneclass_model(
+    *,
+    features: pd.DataFrame,
+    target: pd.Series,
+    validation_size: float,
+    random_state: int,
+    param_grid: list[dict[str, float | str]],
+    model_path: Path,
+    dry_run: bool,
+) -> None:
+    best_params, best_threshold, tuning_results = tune_oneclass_hyperparameters(
+        features,
+        target,
+        param_grid,
+        validation_size,
+        random_state,
+    )
+    print_tuning_results(tuning_results, "One-Class RBF SVM Tuning Results")
+    console.print(f"[bold green]One-Class RBF selected params:[/bold green] {best_params}")
+    console.print(
+        f"[bold green]One-Class RBF selected threshold:[/bold green] {best_threshold:.6f}"
+    )
+
+    final_model = fit_final_oneclass_model(features, target, best_params, random_state)
+    artifact = {
+        "model_type": "unsupervised_oneclass_rbf_svm",
+        "model": final_model,
+        "threshold": best_threshold,
+        "feature_columns": list(features.columns),
+        "params": best_params,
+        "target_column": TARGET_COLUMN,
+        "fit_scope": "non_fraud_only",
+    }
+
+    if dry_run:
+        console.print(
+            f"[yellow]One-Class RBF dry run completed. "
+            f"Model was fitted on {int((~target.astype(bool)).sum()):,} non-fraud rows "
+            "but not saved.[/yellow]"
+        )
+        return
+
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    dump(artifact, model_path)
+    console.print(f"[bold green]One-Class RBF model artifact saved:[/bold green] {model_path}")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -519,7 +673,7 @@ def main() -> None:
 
     console.print(
         Panel.fit(
-            "Training models: supervised linear SVM and RBF kernel SVM\n"
+            "Training models: supervised linear SVM, supervised RBF SVM, and One-Class RBF SVM\n"
             "Target: is_fraud\n"
             "Frequency encoding: job, zip\n"
             "Threshold tuning: validation split",
@@ -589,6 +743,43 @@ def main() -> None:
             random_state=args.random_state,
             model_builder=build_kernel_model,
             model_path=args.kernel_model_path,
+            dry_run=args.dry_run,
+        )
+
+    if "oneclass" in models_to_train:
+        oneclass_features = features
+        oneclass_target = target
+        if (
+            args.oneclass_training_sample_size is not None
+            and args.oneclass_training_sample_size < len(features)
+        ):
+            sample_index, _ = train_test_split(
+                features.index.to_numpy(),
+                train_size=args.oneclass_training_sample_size,
+                random_state=args.random_state,
+                stratify=target,
+            )
+            oneclass_features = features.loc[sample_index].reset_index(drop=True)
+            oneclass_target = target.loc[sample_index].reset_index(drop=True)
+            console.log(
+                "One-Class training/tuning rows sampled: "
+                f"{len(oneclass_features):,} | fraud labels retained for validation only: "
+                f"{int(oneclass_target.astype(bool).sum()):,}"
+            )
+
+        console.log(
+            "One-Class fit input rows: "
+            f"{int((~oneclass_target.astype(bool)).sum()):,} non-fraud rows | "
+            "fraud labels are used only for validation metrics"
+        )
+
+        train_and_save_oneclass_model(
+            features=oneclass_features,
+            target=oneclass_target,
+            validation_size=args.validation_size,
+            random_state=args.random_state,
+            param_grid=get_oneclass_param_grid(args.param_preset),
+            model_path=args.oneclass_model_path,
             dry_run=args.dry_run,
         )
 

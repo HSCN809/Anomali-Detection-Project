@@ -41,6 +41,7 @@ DEFAULT_REDUCED_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted.cs
 DEFAULT_SAMPLED_SOURCE_PATH = PROJECT_ROOT / "DataSet" / "fraud_transformed_reducted_sampled_50k.csv"
 DEFAULT_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_sgd_svm_model.pkl"
 DEFAULT_KERNEL_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "supervised_rbf_svm_model.pkl"
+DEFAULT_ONECLASS_MODEL_PATH = PROJECT_ROOT / "Model Training" / "models" / "oneclass_rbf_svm_model.pkl"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "Model Training" / "evaluation_outputs"
 
 TEST_SIZE = 0.20
@@ -63,12 +64,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sampled-source", type=Path, default=DEFAULT_SAMPLED_SOURCE_PATH)
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--kernel-model", type=Path, default=DEFAULT_KERNEL_MODEL_PATH)
+    parser.add_argument("--oneclass-model", type=Path, default=DEFAULT_ONECLASS_MODEL_PATH)
     parser.add_argument(
         "--models",
         nargs="+",
-        choices=["linear", "kernel", "both"],
-        default=["both"],
-        help="Which model artifact(s) to evaluate. Default evaluates both linear and RBF kernel SVM.",
+        choices=["linear", "kernel", "oneclass", "both", "all"],
+        default=["all"],
+        help="Which model artifact(s) to evaluate. 'both' means linear+kernel; default evaluates all three.",
     )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--chunksize", type=int, default=300_000)
@@ -79,12 +81,19 @@ def parse_args() -> argparse.Namespace:
 
 
 def selected_model_paths(args: argparse.Namespace) -> list[Path]:
-    selected = {"linear", "kernel"} if "both" in args.models else set(args.models)
+    if "all" in args.models:
+        selected = {"linear", "kernel", "oneclass"}
+    elif "both" in args.models:
+        selected = {"linear", "kernel"}
+    else:
+        selected = set(args.models)
     paths = []
     if "linear" in selected:
         paths.append(args.model)
     if "kernel" in selected:
         paths.append(args.kernel_model)
+    if "oneclass" in selected:
+        paths.append(args.oneclass_model)
     return paths
 
 
@@ -600,6 +609,8 @@ def export_pngs(
 
 def model_output_name(model_path: Path, artifact: dict) -> str:
     model_type = str(artifact.get("model_type", "")).lower()
+    if "oneclass" in model_type or "one_class" in model_type:
+        return "oneclass_rbf_svm"
     if "rbf" in model_type or "kernel" in model_type:
         return "kernel_rbf_svm"
     if "sgd" in model_type or "linear" in model_type:
