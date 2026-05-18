@@ -175,10 +175,13 @@ def prepare_features(
 
 
 def selected_model_names(raw_models: list[str]) -> set[str]:
-    if "all" in raw_models:
-        return {"linear", "kernel", "oneclass"}
-    if "both" in raw_models:
-        return {"linear", "kernel"}
+    model_map = {
+        "all": {"linear", "kernel", "oneclass"},
+        "both": {"linear", "kernel"},
+    }
+    for model_name in raw_models:
+        if model_name in model_map:
+            return model_map[model_name]
     return set(raw_models)
 
 
@@ -266,13 +269,7 @@ def build_kernel_model(params: dict[str, float | str], random_state: int) -> SVC
 
 def get_oneclass_param_grid(preset: str) -> list[dict[str, float | str]]:
     if preset == "fast":
-        return [
-            {
-                "kernel": "rbf",
-                "nu": 0.05,
-                "gamma": "scale",
-            }
-        ]
+        return [{"kernel": "rbf", "nu": 0.05, "gamma": "scale"}]
 
     return [
         {
@@ -328,14 +325,8 @@ def metrics_from_predictions(
 
 
 def build_threshold_report(y_true: pd.Series, scores: np.ndarray) -> pd.DataFrame:
-    thresholds = np.unique(
-        np.concatenate(
-            [
-                np.quantile(scores, np.linspace(0.001, 0.999, 300)),
-                np.array([0.0]),
-            ]
-        )
-    )
+    quantile_thresholds = np.quantile(scores, np.linspace(0.001, 0.999, 300))
+    thresholds = np.unique(np.append(quantile_thresholds, 0.0))
     rows = []
 
     for threshold in thresholds:
@@ -371,12 +362,12 @@ def undersample_training_fold(
 
     max_non_fraud = len(fraud_index) * int(non_fraud_ratio)
     sampled_non_fraud_count = min(len(non_fraud_index), max_non_fraud)
-    sampled_non_fraud_index = pd.Index(non_fraud_index).to_series().sample(
+    sampled_non_fraud_index = non_fraud_index.to_series().sample(
         n=sampled_non_fraud_count,
         random_state=random_state,
     ).index
 
-    sampled_index = pd.Index(fraud_index).append(pd.Index(sampled_non_fraud_index))
+    sampled_index = fraud_index.append(sampled_non_fraud_index)
     sampled_index = sampled_index.to_series().sample(
         frac=1.0,
         random_state=random_state,
@@ -429,12 +420,11 @@ def tune_hyperparameters(
         }
         results.append(result)
 
-        target_hit = result["recall"] >= RECALL_TARGET
-        selection_score = (
-            10 - float(result["false_positive_rate"]) + float(result["precision"])
-            if target_hit
-            else float(result["recall"])
-        )
+        selection_score = float(result["recall"])
+        if result["recall"] >= RECALL_TARGET:
+            selection_score = (
+                10 - float(result["false_positive_rate"]) + float(result["precision"])
+            )
 
         if selection_score > best_selection_score:
             best_selection_score = selection_score
@@ -479,12 +469,11 @@ def tune_oneclass_hyperparameters(
         }
         results.append(result)
 
-        target_hit = result["recall"] >= RECALL_TARGET
-        selection_score = (
-            10 - float(result["false_positive_rate"]) + float(result["precision"])
-            if target_hit
-            else float(result["recall"])
-        )
+        selection_score = float(result["recall"])
+        if result["recall"] >= RECALL_TARGET:
+            selection_score = (
+                10 - float(result["false_positive_rate"]) + float(result["precision"])
+            )
 
         if selection_score > best_selection_score:
             best_selection_score = selection_score

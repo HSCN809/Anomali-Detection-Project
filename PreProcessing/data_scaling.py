@@ -74,7 +74,7 @@ def load_dataset(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, dtype=READ_DTYPES, low_memory=False)
 
 
-def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
+def resolve_output_dir(explicit_output_dir: Path | None) -> Path:
     if explicit_output_dir is not None:
         return explicit_output_dir
     return OUTPUT_DIR
@@ -319,41 +319,17 @@ def build_scaling_summary(
 def build_operation_report() -> pd.DataFrame:
     rows = []
 
-    for column in CYCLIC_COLUMNS:
-        rows.append(
-            {
-                "column": column,
-                "operation": "cyclic encoding",
-                "fit_scope": "sampled dataset",
-            }
-        )
-
-    for column in LOG_ROBUST_COLUMNS:
-        rows.append(
-            {
-                "column": column,
-                "operation": "log1p + RobustScaler",
-                "fit_scope": "train only",
-            }
-        )
-
-    for column in STANDARD_SCALE_COLUMNS:
-        rows.append(
-            {
-                "column": column,
-                "operation": "StandardScaler",
-                "fit_scope": "train only",
-            }
-        )
-
-    for column in MINMAX_SCALE_COLUMNS:
-        rows.append(
-            {
-                "column": column,
-                "operation": "MinMaxScaler",
-                "fit_scope": "train only",
-            }
-        )
+    operations = [
+        (CYCLIC_COLUMNS, "cyclic encoding", "sampled dataset"),
+        (LOG_ROBUST_COLUMNS, "log1p + RobustScaler", "train only"),
+        (STANDARD_SCALE_COLUMNS, "StandardScaler", "train only"),
+        (MINMAX_SCALE_COLUMNS, "MinMaxScaler", "train only"),
+    ]
+    for columns, operation, fit_scope in operations:
+        for column in columns:
+            rows.append(
+                {"column": column, "operation": operation, "fit_scope": fit_scope}
+            )
 
     return pd.DataFrame(rows)
 
@@ -429,7 +405,7 @@ def export_scaling_analysis(
 def main() -> None:
     args = parse_args()
     dataframe = load_dataset(args.input)
-    output_dir = resolve_output_dir(args.input, args.output_dir)
+    output_dir = resolve_output_dir(args.output_dir)
     sampled_dataframe = (
         dataframe.reset_index(drop=True)
         if args.no_sample

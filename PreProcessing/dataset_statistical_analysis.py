@@ -69,7 +69,8 @@ def normalize_table_data(data, *, index: bool = True) -> pd.DataFrame:
         if index:
             index_name = normalized.index.name or "index"
             normalized.insert(0, index_name, normalized.index)
-        return normalized.reset_index(drop=True)
+        normalized = normalized.reset_index(drop=True)
+        return normalized
 
     return pd.DataFrame(data)
 
@@ -82,9 +83,8 @@ def export_table_png(data, *, title: str, file_stem: str, index: bool = True) ->
         return
 
     exported_image_paths.add(output_path)
-    table_data = normalize_table_data(data, index=index).apply(
-        lambda column: column.map(format_value)
-    )
+    table_data = normalize_table_data(data, index=index)
+    table_data = table_data.apply(lambda column: column.map(format_value))
 
     row_count = len(table_data)
     column_count = len(table_data.columns)
@@ -123,17 +123,14 @@ def export_table_png(data, *, title: str, file_stem: str, index: bool = True) ->
         cell.set_edgecolor("#d4d4d8")
         cell.set_linewidth(0.55)
 
-        if row_index == 0:
-            cell.set_facecolor("#17191c")
+        is_header = row_index == 0
+        cell.set_facecolor("#17191c" if is_header else "#111315")
+        if is_header:
             cell.set_text_props(color="#ff66ff", weight="bold")
             cell.set_linewidth(1.2)
-            continue
-
-        cell.set_facecolor("#111315")
-        if column_index == 0:
-            cell.set_text_props(color="#00d7ff")
         else:
-            cell.set_text_props(color="#f4f4f5")
+            text_color = "#00d7ff" if column_index == 0 else "#f4f4f5"
+            cell.set_text_props(color=text_color)
 
     figure.savefig(output_path, bbox_inches="tight", facecolor=figure.get_facecolor())
     plt.close(figure)
@@ -175,11 +172,11 @@ def print_table(data, *, index: bool = True) -> None:
         print_plain_table(data, index=index)
         return
 
-    if isinstance(data, pd.DataFrame):
-        print_rich_table(data, index=index)
+    if not isinstance(data, pd.DataFrame):
+        console.print(data)
         return
 
-    console.print(data)
+    print_rich_table(data, index=index)
 
 
 def print_and_export_table(

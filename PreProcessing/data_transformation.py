@@ -47,7 +47,7 @@ def load_dataset(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, low_memory=False)
 
 
-def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
+def resolve_output_dir(explicit_output_dir: Path | None) -> Path:
     if explicit_output_dir is not None:
         return explicit_output_dir
     return OUTPUT_DIR
@@ -124,14 +124,11 @@ def apply_dtype_conversions(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def transform_dataset(dataframe: pd.DataFrame) -> pd.DataFrame:
-    transformed = dataframe.copy()
-    transformed = apply_dtype_conversions(transformed)
+    transformed = apply_dtype_conversions(dataframe)
     transformed = add_time_features(transformed)
     transformed = add_age_feature(transformed)
     transformed = add_distance_feature(transformed)
-    transformed = encode_categorical_features(transformed)
-
-    return transformed
+    return encode_categorical_features(transformed)
 
 
 def save_transformed_dataset(dataframe: pd.DataFrame, output_path: Path) -> None:
@@ -366,7 +363,7 @@ def export_transformation_analysis(
 def main() -> None:
     args = parse_args()
     dataframe = load_dataset(args.input)
-    output_dir = resolve_output_dir(args.input, args.output_dir)
+    output_dir = resolve_output_dir(args.output_dir)
     transformed_dataframe = transform_dataset(dataframe)
     save_transformed_dataset(transformed_dataframe, args.output)
 

@@ -70,8 +70,8 @@ def ensure_output_dir(output_dir: Path) -> None:
 
 
 def save_current_figure(filename: str, output_dir: Path) -> None:
-    ensure_output_dir(output_dir)
     output_path = output_dir / filename
+    ensure_output_dir(output_dir)
     plt.savefig(output_path, bbox_inches="tight", facecolor=plt.gcf().get_facecolor())
     plt.close()
     console.print(f"[green]PNG exported:[/green] {output_path}")
@@ -364,11 +364,12 @@ def plot_distance_bucket_fraud_rate(dataframe: pd.DataFrame, output_dir: Path) -
 
 def plot_amount_vs_distance_sample(dataframe: pd.DataFrame, output_dir: Path) -> None:
     fraud_rows = dataframe[dataframe[TARGET_COLUMN]]
-    non_fraud_rows = dataframe[~dataframe[TARGET_COLUMN]].sample(
+    non_fraud_rows = dataframe[~dataframe[TARGET_COLUMN]]
+    non_fraud_sample = non_fraud_rows.sample(
         n=min(SCATTER_SAMPLE_SIZE, (~dataframe[TARGET_COLUMN]).sum()),
         random_state=RANDOM_STATE,
     )
-    sample = pd.concat([fraud_rows, non_fraud_rows], ignore_index=True)
+    sample = pd.concat([fraud_rows, non_fraud_sample], ignore_index=True)
 
     _, axis = create_figure(10, 6)
     sns.scatterplot(
@@ -443,9 +444,10 @@ def plot_correlation_heatmap(dataframe: pd.DataFrame, output_dir: Path) -> None:
         "gender_M",
         TARGET_COLUMN,
     ]
-    correlation_columns.extend(
+    category_columns = [
         column for column in dataframe.columns if column.startswith(CATEGORY_PREFIX)
-    )
+    ]
+    correlation_columns.extend(category_columns)
 
     correlation_data = dataframe[correlation_columns].astype(float)
     correlation_matrix = correlation_data.corr()

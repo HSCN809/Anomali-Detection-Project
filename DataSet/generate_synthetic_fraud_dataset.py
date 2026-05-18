@@ -111,10 +111,11 @@ def build_customers(fake: Faker, rng: np.random.Generator) -> pd.DataFrame:
 def build_merchants(fake: Faker, rng: np.random.Generator) -> dict[str, list[str]]:
     merchants: dict[str, list[str]] = {}
     for category in CATEGORIES:
-        merchants[category] = [
-            f"fraud_{category}_{fake.company().replace(',', '')}_{index}"
-            for index in range(MERCHANTS_PER_CATEGORY)
-        ]
+        names = []
+        for index in range(MERCHANTS_PER_CATEGORY):
+            company = fake.company().replace(",", "")
+            names.append(f"fraud_{category}_{company}_{index}")
+        merchants[category] = names
         rng.shuffle(merchants[category])
     return merchants
 
@@ -127,7 +128,8 @@ def generate_timestamps(
     base_date = np.datetime64("2024-01-01")
     days = rng.integers(0, 365, size=rows)
     hours = np.empty(rows, dtype="int64")
-    normal_count = int((~fraud_mask).sum())
+    normal_mask = ~fraud_mask
+    normal_count = int(normal_mask.sum())
     fraud_count = int(fraud_mask.sum())
     normal_night = rng.random(normal_count) < NORMAL_NIGHT_RATE
     fraud_night = rng.random(fraud_count) < FRAUD_NIGHT_RATE
@@ -142,7 +144,7 @@ def generate_timestamps(
         rng.choice(NIGHT_HOURS, size=fraud_count),
         rng.choice(DAY_HOURS, size=fraud_count),
     )
-    hours[~fraud_mask] = normal_hours
+    hours[normal_mask] = normal_hours
     hours[fraud_mask] = fraud_hours
     minutes = rng.integers(0, 60, size=rows)
     seconds = rng.integers(0, 60, size=rows)
@@ -210,6 +212,7 @@ def generate_dataset(rows: int, fraud_rate: float, random_state: int) -> pd.Data
     fraud_count = int(round(rows * fraud_rate))
     fraud_mask = np.array([True] * fraud_count + [False] * (rows - fraud_count))
     rng.shuffle(fraud_mask)
+    normal_mask = ~fraud_mask
 
     customers = build_customers(fake, rng)
     merchants = build_merchants(fake, rng)
@@ -217,9 +220,9 @@ def generate_dataset(rows: int, fraud_rate: float, random_state: int) -> pd.Data
     customer_frame = customers.iloc[customer_ids].reset_index(drop=True)
 
     categories = np.empty(rows, dtype=object)
-    categories[~fraud_mask] = rng.choice(
+    categories[normal_mask] = rng.choice(
         CATEGORIES,
-        size=int((~fraud_mask).sum()),
+        size=int(normal_mask.sum()),
         p=NORMAL_CATEGORY_PROBS,
     )
     categories[fraud_mask] = rng.choice(
@@ -227,7 +230,7 @@ def generate_dataset(rows: int, fraud_rate: float, random_state: int) -> pd.Data
         size=fraud_count,
         p=FRAUD_CATEGORY_PROBS,
     )
-    normal_index = np.where(~fraud_mask)[0]
+    normal_index = np.where(normal_mask)[0]
     fraud_index = np.where(fraud_mask)[0]
     normal_risk_index = normal_index[
         rng.random(len(normal_index)) < NORMAL_RISK_CATEGORY_NOISE_RATE
@@ -236,18 +239,19 @@ def generate_dataset(rows: int, fraud_rate: float, random_state: int) -> pd.Data
         rng.random(len(fraud_index)) < FRAUD_LOW_RISK_CATEGORY_RATE
     ]
     categories[normal_risk_index] = rng.choice(RISK_CATEGORIES, size=len(normal_risk_index))
-    categories[fraud_low_risk_index] = rng.choice(CATEGORIES, size=len(fraud_low_risk_index), p=NORMAL_CATEGORY_PROBS)
+    categories[fraud_low_risk_index] = rng.choice(
+        CATEGORIES,
+        size=len(fraud_low_risk_index),
+        p=NORMAL_CATEGORY_PROBS,
+    )
 
-    merchant_values = [
-        rng.choice(merchants[category])
-        for category in categories
-    ]
+    merchant_values = [rng.choice(merchants[category]) for category in categories]
     timestamps = generate_timestamps(rng, rows, fraud_mask)
     amounts = generate_amounts(rng, rows, fraud_mask, categories)
 
     merch_lat = customer_frame["lat"].astype(float).to_numpy().copy()
     merch_long = customer_frame["long"].astype(float).to_numpy().copy()
-    normal_index = np.where(~fraud_mask)[0]
+    normal_index = np.where(normal_mask)[0]
     fraud_index = np.where(fraud_mask)[0]
     normal_far_index = normal_index[
         rng.random(len(normal_index)) < NORMAL_FAR_MERCHANT_RATE

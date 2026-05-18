@@ -355,14 +355,20 @@ def print_configuration(args: argparse.Namespace, steps: list[PipelineStep]) -> 
     table = Table(title="Pipeline Configuration", header_style="bold magenta")
     table.add_column("setting")
     table.add_column("value", justify="right")
-    table.add_row("project_root", str(ROOT_DIR))
-    table.add_row("python", str(venv_python_path()))
-    table.add_row("rows", f"{args.rows:,}")
-    table.add_row("fraud_rate", f"{args.fraud_rate:.2%}")
-    table.add_row("sample_size", f"{args.sample_size:,}")
-    table.add_row("model", args.model)
-    table.add_row("training_preset", args.training_preset)
-    table.add_row("steps", str(len(steps)))
+
+    rows = [
+        ("project_root", str(ROOT_DIR)),
+        ("python", str(venv_python_path())),
+        ("rows", f"{args.rows:,}"),
+        ("fraud_rate", f"{args.fraud_rate:.2%}"),
+        ("sample_size", f"{args.sample_size:,}"),
+        ("model", args.model),
+        ("training_preset", args.training_preset),
+        ("steps", str(len(steps))),
+    ]
+    for name, value in rows:
+        table.add_row(name, value)
+
     console.print(table)
 
 

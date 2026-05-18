@@ -7,3 +7,5 @@ seaborn
 svm
 rich
 Faker
+ruff
+

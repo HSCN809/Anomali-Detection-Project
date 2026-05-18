@@ -95,7 +95,7 @@ def save_cleaned_dataset(dataframe: pd.DataFrame, output_path: Path) -> None:
     temp_output_path.replace(output_path)
 
 
-def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
+def resolve_output_dir(explicit_output_dir: Path | None) -> Path:
     if explicit_output_dir is not None:
         return explicit_output_dir
     return OUTPUT_DIR
@@ -104,31 +104,27 @@ def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
 def build_missing_values_summary(dataframe: pd.DataFrame) -> pd.DataFrame:
     missing_values = dataframe.isnull().sum().sort_values(ascending=False)
     total_rows = len(dataframe)
+    if total_rows:
+        missing_percent = missing_values / total_rows * 100
+    else:
+        missing_percent = missing_values * 0
 
     return pd.DataFrame(
         {
             "Column": missing_values.index,
             "Missing Count": [f"{count:,}" for count in missing_values],
-            "Missing Percent": [
-                f"{(count / total_rows * 100) if total_rows else 0:.2f}%"
-                for count in missing_values
-            ],
+            "Missing Percent": [f"{percent:.2f}%" for percent in missing_percent],
         }
     )
 
 
 def print_missing_values_table(summary: pd.DataFrame) -> None:
-    table = Table(
-        title="Missing Values by Column",
-        header_style="bold magenta",
-        show_lines=False,
-    )
-    table.add_column("Column", style="cyan")
-    table.add_column("Missing Count", justify="right")
-    table.add_column("Missing Percent", justify="right")
+    table = Table(title="Missing Values by Column", header_style="bold magenta")
+    for column in summary.columns:
+        table.add_column(column, justify="right" if column != "Column" else "left")
 
     for row in summary.itertuples(index=False):
-        table.add_row(row.Column, row[1], row[2])
+        table.add_row(*(str(value) for value in row))
 
     console.print(table)
 
@@ -191,7 +187,7 @@ def export_missing_values_png(summary: pd.DataFrame, output_dir: Path) -> None:
 def main() -> None:
     args = parse_args()
     dataframe = load_dataset(args.input, args.nrows)
-    output_dir = resolve_output_dir(args.input, args.output_dir)
+    output_dir = resolve_output_dir(args.output_dir)
     missing_values_summary = build_missing_values_summary(dataframe)
 
     console.print(

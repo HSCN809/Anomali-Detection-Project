@@ -63,7 +63,7 @@ def load_dataset(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, dtype=READ_DTYPES, low_memory=False)
 
 
-def resolve_output_dir(path: Path, explicit_output_dir: Path | None) -> Path:
+def resolve_output_dir(explicit_output_dir: Path | None) -> Path:
     if explicit_output_dir is not None:
         return explicit_output_dir
     return OUTPUT_DIR
@@ -225,7 +225,7 @@ def export_reduction_analysis(
 def main() -> None:
     args = parse_args()
     original_dataframe = load_dataset(args.input)
-    output_dir = resolve_output_dir(args.input, args.output_dir)
+    output_dir = resolve_output_dir(args.output_dir)
     reduced_dataframe = reduce_dataset(original_dataframe)
     save_reduced_dataset(reduced_dataframe, args.output)
 

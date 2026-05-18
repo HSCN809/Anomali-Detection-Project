@@ -81,12 +81,16 @@ def parse_args() -> argparse.Namespace:
 
 
 def selected_model_paths(args: argparse.Namespace) -> list[Path]:
-    if "all" in args.models:
-        selected = {"linear", "kernel", "oneclass"}
-    elif "both" in args.models:
-        selected = {"linear", "kernel"}
-    else:
-        selected = set(args.models)
+    model_map = {
+        "all": {"linear", "kernel", "oneclass"},
+        "both": {"linear", "kernel"},
+    }
+    selected = set(args.models)
+    for model_name in args.models:
+        if model_name in model_map:
+            selected = model_map[model_name]
+            break
+
     paths = []
     if "linear" in selected:
         paths.append(args.model)
@@ -334,7 +338,7 @@ def build_threshold_report(
 ) -> pd.DataFrame:
     y_true_bool = y_true.astype(bool).to_numpy()
     quantile_thresholds = np.quantile(scores, np.linspace(0.001, 0.999, 240))
-    thresholds = np.unique(np.concatenate([quantile_thresholds, np.array([0.0])]))
+    thresholds = np.unique(np.append(quantile_thresholds, 0.0))
     rows = []
 
     for threshold in thresholds:
@@ -358,10 +362,9 @@ def build_threshold_report(
 
 
 def select_operating_threshold(threshold_report: pd.DataFrame) -> pd.Series | None:
-    candidates = threshold_report[
-        (threshold_report["recall"] >= RECALL_TARGET)
-        & (threshold_report["false_positive_rate"] <= FPR_TARGET)
-    ]
+    recall_ok = threshold_report["recall"] >= RECALL_TARGET
+    false_positive_ok = threshold_report["false_positive_rate"] <= FPR_TARGET
+    candidates = threshold_report[recall_ok & false_positive_ok]
     if candidates.empty:
         return None
 
