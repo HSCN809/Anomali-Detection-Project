@@ -458,7 +458,7 @@ def save_confusion_matrix_png(metrics: dict[str, float], output_path: Path) -> N
     figure, axis = plt.subplots(figsize=(6.8, 5.8), dpi=150)
     figure.patch.set_facecolor("#111315")
     axis.set_facecolor("#111315")
-    image = axis.imshow(matrix, cmap="magma")
+    image = axis.imshow(matrix, cmap="Pastel2")
 
     axis.set_title("Confusion Matrix", color="#f4f4f5", pad=14)
     axis.set_xlabel("Predicted", color="#f4f4f5")
